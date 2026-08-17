@@ -40,7 +40,7 @@
 | `5nUKjALP` | 来源项目 | 奥联电子-1期\|KH0091-01（`AzLXVpia`） |
 | `Wq56Wyjw` | 产品负责人 | 张晴晴（`3cAXW7MC`） |
 | `Jtnem8qs` | 来源客户 | KH0091奥联电子（`8qRUnWa2`） |
-| `R3UqL3Vm` | 系统环境 | t-aolian-奥联集成环境（uuid 需 `capture_field_options()` 捕获后缓存） |
+| `R3UqL3Vm` | 系统环境 | t-aolian-奥联集成环境（uuid 需 `capture_field_options_fiber()` 捕获后缓存） |
 | `W9qkyVXr` | 功能模块（新） | 计划管理（`2s221obZ`） |
 | `field012` | 优先级 | P2（`JYC3tQnb`） |
 | `field004` | 负责人 | 当前 ONES 登录账号（`get_current_user()`，localStorage `user_id`） |
@@ -49,6 +49,16 @@
 | `field038` | 严重程度 | 默认「一般」；黑盒报告的 P0~P4 仅自用，不据此定级 |
 | `DPNDusA2` | 测试责任人 | 廖柏全 |
 | `NnkkhDGK` | 缺陷分类 | 按需 |
+
+## 全局常量表（不随项目变，勿每次重新发现）
+
+| 项 | 值 / 获取方式 |
+| --- | --- |
+| 严重程度 option uuid | 致命 `Dgk6PHkS`、严重 `QYe31Dn9`、一般 `XxwMNPQp`、提示 `A3HEmFsu`、建议 `RDtgWTEi`、保留 `MnAwAecn`（`ones_helpers.SEVERITY`） |
+| 提交默认严重程度 | 一般（`ones_helpers.DEFAULT_SEVERITY`）；黑盒报告的 P0~P4 仅内部自用 |
+| 当前登录账号 | `localStorage.user_id` / `user_name`（`ones_helpers.get_current_user()`），负责人/验证人用它 |
+| 缺陷类型 scope | 从同团队历史缺陷 `tasks/info` 的 `issue_type_scope_uuid` 读（欧斯达 `M33Rzztq`），写入 profile |
+| 工作项类型「缺陷」 type uuid | `6FUpniBf`（`issue_type_uuid`，区别于 `issue_type_scope_uuid`） |
 
 ## 字段映射（具体取值见 config/field-mapping.yaml，换项目只改配置）
 
@@ -88,27 +98,16 @@
   仅需传入标题/描述/处理人；`create_linked_defect()` 创建+关联，秒级。
 - 封装：`ones_helpers.get_parent_handlers()`（主工单前端/后端人员）、`build_defect_fields()`（字段构建）、`create_linked_defect()`（创建+关联）。
 
-### 混合模式：字段选项 UUID 捕获（推荐，提速关键）
+### 字段选项 UUID 捕获（一次性）
 
-纯 API 直连最大的卡点是「系统环境」这类下拉字段需要**选项 UUID**，
-而字段选项接口经常 404、UI 下拉 DOM 也不暴露 uuid。解法是**只探一次、之后全走 API**：
+「系统环境」这类下拉需要**选项 UUID**，DOM 不直接暴露，用 `capture_field_options_fiber()` 一次捕获即可：
 
 1. `ones_helpers.open_defect_form(page, team_uuid, task_uuid, title)` 打开新建缺陷弹窗（自动选"缺陷"类型）；
-2. `ones_helpers.capture_field_options(page, "系统环境", "奥联", "t-aolian")` ——
-   聚焦字段搜索框、键入关键词，从接口响应提取 `{text, uuid}`；
-   **接口响应拿不到时改用 `ones_helpers.capture_field_options_fiber(page, "系统环境", "ousida")`**
-   （从下拉虚拟列表 `List` fiber 的 `memoizedProps.data[].value` 取 uuid，显示名取可见 option 文本按序对齐）。
-3. 把 uuid 写入 `config/field-mapping.yaml` 的 `option_uuids` 缓存（按项目）；
-4. 之后创建全部走 `build_defect_fields()` + `create_linked_defect()`，每条秒级，不再碰弹窗。
+2. `ones_helpers.capture_field_options_fiber(page, "系统环境", "ousida")` —— 定位字段下拉、键入关键词，
+   从虚拟列表 `List` fiber 的 `memoizedProps.data[].value` 取 uuid，显示名取可见 option 文本按序对齐，返回 `[{text, uuid}]`；
+3. 把 uuid 写入 `config/field-mapping.yaml` 的 profile（`system_env.option_uuid`），换项目只改配置。
 
-同一项目同字段只需捕获一次；换客户项目只改配置。
-
-**UI 提取方法（实测可用）**：DOM 的 option 属性不暴露 uuid，选项数据在虚拟列表
-`List` fiber 的 `memoizedProps.data[]` 里（`data[].value`=选项 uuid、显示名在可见 option 文本）。
-做法：`page.locator(".ones-form-item", has=page.locator("label:has-text('系统环境')"))`
-定位字段 → 点其 `.ones-select` 打开下拉 → 读可见 option 文本（去重保序）+ List `data[].value` 对齐。
-已封装为 `ones_helpers.capture_field_options_fiber()`。
-已验证：奥联「系统环境」`t-aolian-奥联集成环境` = `SeMgos4c`（已写入 field-mapping）。
+已验证：奥联 `t-aolian-奥联集成环境` = `SeMgos4c`；欧斯达 `t-ousida-瓯斯达集成测试（客户侧）` = `TAHbjMwv`。
 
 ## 描述编辑器（CKEditor）
 

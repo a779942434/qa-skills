@@ -68,10 +68,12 @@ def parse_bug_report(md_path):
             continue
         key, title = m.group(1), m.group(2).strip()
         evidence = []
-        for em in re.finditer(r"(?m)^\s*[-*] (.+\.(?:png|jpg|jpeg|gif|xlsx|csv|txt))", b):
-            seg = re.match(r"(.+?\.(?:png|jpg|jpeg|gif|xlsx|csv|txt))", em.group(1).strip())
-            if seg:
-                evidence.append(re.sub(r"^证据[:：]\s*", "", seg.group(1)))
+        for em in re.finditer(r"(?m)^\s*[-*]\s*(.+)$", b):
+            line = re.sub(r"^证据[:：]\s*", "", em.group(1).strip())
+            for tok in re.split(r"[\s、,，]+", line):
+                tok = tok.strip()
+                if re.search(r"\.(?:png|jpg|jpeg|gif|xlsx|csv|txt)$", tok, re.IGNORECASE):
+                    evidence.append(tok)
         bugs.append({"key": key, "title": title, "evidence": evidence, "desc": b.strip()})
     return bugs
 
@@ -94,6 +96,27 @@ def profile_overrides(profile):
         if v:
             ov[fu] = v
     return ov
+
+
+def check_profile(profile):
+    """校验 profile 必需字段是否齐全，返回警告列表。"""
+    warnings = []
+    if not profile:
+        return ["未指定 --profile，字段依赖主工单兜底，缺陷类型 scope 可能缺失"]
+    src = profile.get("source_project") or {}
+    env = profile.get("system_env") or {}
+    mod = profile.get("function_module") or {}
+    checks = [
+        ("来源项目 option_uuid", src.get("option_uuid")),
+        ("系统环境 option_uuid", env.get("option_uuid")),
+        ("功能模块 option_uuid", mod.get("option_uuid")),
+        ("优先级 priority_uuid", profile.get("priority_uuid")),
+        ("缺陷类型 issue_type_scope_uuid", profile.get("issue_type_scope_uuid")),
+    ]
+    for label, v in checks:
+        if not v:
+            warnings.append(f"缺少 {label}")
+    return warnings
 
 
 def apply_overrides(field_values, overrides):
@@ -215,6 +238,7 @@ def main():
             b["title"] = f"【{feature}】{b['title']}"
     overrides = profile_overrides(profile)
     scope_uuid = (profile or {}).get("issue_type_scope_uuid")
+    profile_warnings = check_profile(profile)
     evidence_base = [str(Path(args.bug_report).resolve().parent)]
     if profile and profile.get("site", {}).get("evidence_dir"):
         proj_root = Path(__file__).resolve().parent.parent
@@ -223,6 +247,8 @@ def main():
     print("解析到缺陷:", ", ".join(b["key"] for b in bugs))
     print("字段覆盖表:", json.dumps(overrides, ensure_ascii=False))
     print("issue_type_scope_uuid:", scope_uuid or "(未配置)")
+    for w in profile_warnings:
+        print(f"[警告] {w}")
     if args.dry_run:
         for b in bugs:
             ev, missing = resolve_evidence(b, evidence_base)

@@ -196,7 +196,32 @@ def assert_new_target(baseline, target, label="目标记录"):
     return True
 
 
+def parse_import_template(path):
+    """解析导入模板表头，返回 [{name, required, col}]（`*` 前缀表示必填）。
+
+    用于导入功能测试时快速核对模板必填标记与需求是否一致。
+    """
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        print("[bbt] 未安装 openpyxl，无法解析导入模板")
+        return []
+    wb = load_workbook(path, data_only=True)
+    ws = wb.active
+    headers = []
+    for cell in ws[1]:
+        if cell.value is None:
+            continue
+        name = str(cell.value).strip()
+        required = name.startswith("*")
+        if required:
+            name = name[1:].strip()
+        headers.append({"name": name, "required": required, "col": cell.column})
+    return headers
+
+
 if __name__ == "__main__":
     print("bbt_helpers 可用函数:")
     print("  connect / disconnect / attach_error_watchers / collect_toasts / error_report")
     print("  wait_visible / table_columns / read_table_rows / snap / record_baseline / assert_new_target")
+    print("  find_page / parse_import_template")
