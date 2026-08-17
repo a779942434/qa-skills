@@ -1,0 +1,16 @@
+# DataGrip 数据源凭据模板（技能随附，不含任何真实凭据，可随技能分享）
+#
+# 真实账号密码请放在本机用户目录（不属于技能，不会随分享带走）：
+#   ~/.codex/credentials/databases.yaml
+#
+#   示例内容：
+#     default_user: "你的用户名"
+#     default_password: "你的密码"
+#     databases:
+#       "某库": {user: "root", password: "其它密码"}
+#
+# 也可以用环境变量临时提供：DB_PASSWORD_<数据源名>（名称转大写、非字母数字用 _）
+# 或用环境变量 DATAGRIP_CREDENTIALS_FILE 指定其它凭据文件路径。
+#
+# 本文件仅作默认 user 等非敏感兜底；不要在这里写真实密码。
+databases: {}

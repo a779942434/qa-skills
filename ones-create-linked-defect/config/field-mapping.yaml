@@ -1,0 +1,125 @@
+# ONES 缺陷字段映射（与主工单一致）
+#
+# 换客户项目 / 人员 / 优先级时，只改这个文件；
+# SKILL.md 与 references/ones-ui.md 不写死具体值。
+
+# 优先级（与主工单一致）
+priority: "P2"
+
+# 负责人 / 验证人 = 实际登录 ONES 的账号（动态获取，不预设姓名）
+assignee: ""
+
+# 处理人取值规则：动态取自主工单信息，不在此写死人名
+#   UI 前端类 bug → 主工单"前端人员"（ones_helpers.get_parent_handlers 返回第 1 项）
+#   其余类 bug → 主工单"后端人员"（同上第 2 项）
+#   field-mapping.handler 即"主工单后端人员"的语义（动态获取）
+handler: ""
+
+# 产品负责人：默认取主工单产品负责人（动态，不在此配置）
+
+# 来源项目：搜索关键词 + 完整名称
+source_project:
+  keyword: "可挺"
+  name: "宁波可挺-1期|KH0094-01"
+
+# 系统环境：搜索关键词 + 完整名称
+system_env:
+  keyword: "可挺"
+  name: "t-keting-可挺集成测试（客户侧）"
+
+# 功能模块（新）候选，按当前功能选择
+function_modules:
+  - "计划管理"
+  - "APS模块（自动排产）"
+
+# 证据截图 / 导入文件目录索引：功能名 -> 目录
+# 注意：这是历史示例路径，实际以对应功能测试输出目录为准；
+#       找不到时先按功能名搜索（人员资质/排产数据等目录不同，勿混用）。
+evidence_dirs:
+  "排产数据回传": 'C:\Users\lenovo\.codex\visualizations\2026\08\05\019fcff3-0102-7cd3-94cf-df207be9e8cf'
+
+# ============ 奥联（当前项目，工单 #197519 等） ============
+# 换客户项目时复制本段并改取值；选项 uuid 用 capture_field_options() 捕获后填入 option_uuids。
+aolian:
+  site:
+    url: "http://t-aolian.ob.shuyilink.com/"
+    feature: "生产订单分单辅助排产（排产结果 AL）"
+    evidence_dir: "test-reports/2026-08-12_辅助排产/evidence"
+  source_project:
+    keyword: "奥联电子"
+    name: "奥联电子-1期|KH0091-01"
+    option_uuid: "AzLXVpia"
+  source_customer:
+    keyword: "奥联"
+    name: "KH0091奥联电子"
+    option_uuid: "8qRUnWa2"
+  system_env:
+    keyword: "奥联"
+    name: "t-aolian-奥联集成环境"
+    option_uuid: "SeMgos4c"   # 2026-08-13 从 UI 下拉 React fiber 提取（bbt_ones_env_uuid_ui.py）
+  function_module:
+    keyword: "计划管理"
+    name: "计划管理"
+    option_uuid: "2s221obZ"
+  priority: "P2"
+  priority_uuid: "JYC3tQnb"
+  people:
+    product_owner: "张晴晴"
+    product_owner_uuid: "3cAXW7MC"
+    assignee: "廖柏全"              # 负责人 / 验证人 = 实际登录账号
+    assignee_uuid: "RsxEsWtX"
+    backend: "安杰"
+    backend_uuid: "1vmJxxsw"
+    frontend: "王斌"
+    frontend_uuid: "JGwXEzXq"
+  severity:
+    s2: "严重"
+    s3: "一般"
+    s4: "轻微"
+  option_uuids:
+    # 字段选项文本 -> uuid 缓存（capture_field_options 捕获后填，避免每次重探）
+    "t-aolian-奥联集成环境": "SeMgos4c"
+
+# ============ dog 标准测试环境（3.0）（工单 #200651 等） ============
+dog:
+  site:
+    url: "http://dog.ob.shuyilink.com/home"
+    feature: "待用计划规则配置"
+    evidence_dir: "test-reports/2026-08-13_待用计划规则配置/evidence"
+  people:
+    assignee: "廖柏全"              # 负责人 / 验证人 = 实际登录账号
+    assignee_uuid: "RsxEsWtX"
+  system_env:
+    keyword: "dog"
+    name: "dog-标准测试环境（3.0）"
+    option_uuid: "9DHFMVCy"
+  option_uuids:
+    "dog-标准测试环境（3.0）": "9DHFMVCy"
+
+# ============ 欧斯达 3.0 定制（工单 #199983 等） ============
+# 说明：负责人/验证人不再写死，统一取当前 ONES 登录账号（get_current_user）；
+#       严重程度默认「一般」，黑盒报告的 S1~S4 仅自用。
+ousida:
+  site:
+    url: "http://t-ousida.ob.shuyilink.com/"
+    feature: "订单周期定义表（OSD）"
+  source_project:
+    keyword: "瓯斯达"
+    option_uuid: "pfRxWoEf"
+  source_customer:
+    option_uuid: "DJgoLdL4"
+  system_env:
+    keyword: "ousida"
+    name: "t-ousida-瓯斯达集成测试（客户侧）"
+    option_uuid: "TAHbjMwv"
+  function_module:
+    keyword: "计划管理"
+    name: "计划管理"
+    option_uuid: "2s221obZ"
+  priority: "P2"
+  priority_uuid: "JYC3tQnb"
+  issue_type_scope_uuid: "M33Rzztq"   # 缺陷工作项类型 scope
+  people:
+    product_owner_uuid: "3cAXW7MC"     # 产品负责人 张晴晴
+    backend: "1vmJxxsw"                # 后端人员
+    frontend: "WNopTtex"               # 前端人员

@@ -1,0 +1,4 @@
+interface:
+  display_name: "ONES 缺陷全流程"
+  short_description: "ONES 缺陷全流程：新建关联缺陷、回归后关闭/评论@处理人、主工单流转状态"
+  default_prompt: "打开 ONES 工单，按本地缺陷清单创建关联缺陷或处理回归流转（关闭通过项、@处理人说明未修复、流转主工单），完成后汇报"

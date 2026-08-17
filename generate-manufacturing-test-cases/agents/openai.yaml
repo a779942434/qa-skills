@@ -1,0 +1,4 @@
+interface:
+  display_name: "制造类测试用例生成"
+  short_description: "从 PRD/流程图/补充规则生成制造/MES 业务测试用例"
+  default_prompt: "Use $generate-manufacturing-test-cases 根据 PRD 与补充规则生成标准功能测试版测试用例。"
