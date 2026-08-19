@@ -57,6 +57,9 @@ description: >-
 
 换新客户项目时，先做一次字段/选项发现，写入 `config/field-mapping.yaml` 的 profile；之后日常提缺陷只跑 CLI 即可，不再反向工程。
 
+**推荐一键接入**：`python scripts/ones_project_setup.py --work-order <工单URL> --profile <新项目名> [--env-keyword ousida] [--sample-defect <历史缺陷uuid>]`，
+自动完成下面 1~3 步并写入 profile（`--dry-run` 先看结果不落盘）。
+
 1. 打开一次新建缺陷弹窗（`open_defect_form`），用 `capture_field_options_fiber()` 捕获「系统环境 R3UqL3Vm」的选项 uuid。
 2. 用 `get_task_required_fields()` 从主工单取：来源项目、来源客户、功能模块、产品负责人、优先级、前端/后端人员 uuid。
 3. 缺陷工作项类型 `issue_type_scope_uuid`：从同团队任一历史缺陷 `tasks/info` 读（如 `M33Rzztq`），写入 profile 的 `issue_type_scope_uuid`。
@@ -129,7 +132,8 @@ description: >-
   （open_defect_form / set_select_option / set_desc / upload_evidence /
    submit_defect / capture_field_options_fiber / list_related_tasks / dedup_check）。
 - `scripts/ones_submit_defects.py`：一键批量提缺陷 CLI（读清单 + profile 字段缓存 + 默认严重程度一般 + 负责人/验证人=登录账号 + 证据上传）。
-- `scripts/bbt_ones_backfill_evidence.py`：给已建缺陷补传/回填证据文件。
+- `scripts/ones_project_setup.py`：新项目接入脚本（自动发现字段/系统环境 uuid/scope，写入 field-mapping.yaml profile）。
+- `scripts/ones_backfill_evidence.py`：给已建缺陷补传/回填证据文件。
 - `scripts/ones_config.py`：配置加载（YAML → 环境变量 → 平台默认）。
 - `config/settings.yaml`：环境/浏览器配置；`config/field-mapping.yaml`：字段映射与证据目录索引。
 - `references/ones-ui.md`：选择器速查、字段映射、编辑器/上传/粘贴、缺陷单与主工单状态流转细节。

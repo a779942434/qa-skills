@@ -150,6 +150,40 @@ def get_current_user(page):
     )
 
 
+# 缺陷创建白名单：只提交缺陷类型可写字段，避免把需求/模板冗余字段带进 add3
+DEFECT_FIELD_WHITELIST = (
+    "field001", "field002", "5nUKjALP", "W9qkyVXr", "Wq56Wyjw", "field012",
+    "Jtnem8qs", "R3UqL3Vm", "field004", "Sg5vqjRr", "DPNDusA2", "95jUV2Mb",
+    "field038", "NnkkhDGK",
+)
+
+
+def get_parent_field_values(page, team_uuid, task_uuid):
+    """只取主工单白名单字段的完整 field_value 对象（避免每个 bug 重复 fetch 完整 info）。"""
+    info = get_task_info(page, team_uuid, task_uuid)
+    return {f.get("field_uuid"): f for f in (info or {}).get("field_values", [])
+            if f.get("field_uuid") in DEFECT_FIELD_WHITELIST}
+
+
+def get_parent_context(page, team_uuid, task_uuid):
+    """一次 fetch 主工单，返回 (required_fields, parent_field_values)，供多次建缺陷复用。"""
+    info = get_task_info(page, team_uuid, task_uuid) or {}
+    fv = {f.get("field_uuid"): f.get("value") for f in info.get("field_values", [])}
+    req = {
+        "number": info.get("number"),
+        "summary": info.get("summary"),
+        "owner": info.get("owner"),
+        "assign": info.get("assign"),
+        "status_uuid": info.get("status_uuid"),
+        "issue_type_uuid": info.get("issue_type_uuid"),
+        "issue_type_scope_uuid": info.get("issue_type_scope_uuid"),
+        "fields": {name: fv.get(uuid) for uuid, name in PARENT_REQUIRED_FIELDS.items()},
+    }
+    parent_fv = {f.get("field_uuid"): f for f in info.get("field_values", [])
+                 if f.get("field_uuid") in DEFECT_FIELD_WHITELIST}
+    return req, parent_fv
+
+
 def get_transitions(page, team_uuid, task_uuid):
     """读取工单可流转状态列表（transitions[]，含 uuid/name/end_status_uuid）。"""
     return _api(
@@ -700,7 +734,7 @@ def dedup_check(titles):
     return {t: c for t, c in Counter(titles).items() if c > 1}
 
 
-def build_defect_fields(page, team_uuid, parent_task_uuid, summary, desc, handler_uuid, sample_defect_uuid=None, overrides=None, severity_text=DEFAULT_SEVERITY):
+def build_defect_fields(page, team_uuid, parent_task_uuid, summary, desc, handler_uuid, sample_defect_uuid=None, overrides=None, severity_text=DEFAULT_SEVERITY, parent_fv=None):
     """从接口构建缺陷 field_values（全 API，不依赖 UI 弹窗）。
 
     字段来源：
@@ -725,14 +759,8 @@ def build_defect_fields(page, team_uuid, parent_task_uuid, summary, desc, handle
         "field004": 8, "Sg5vqjRr": 8, "DPNDusA2": 8, "95jUV2Mb": 8,
         "field038": 1, "NnkkhDGK": 1,
     }
-    # 缺陷创建白名单：只提交缺陷类型可写字段，避免把需求/模板冗余字段带进 add3
-    DEFECT_FIELD_WHITELIST = (
-        "field001", "field002", "5nUKjALP", "W9qkyVXr", "Wq56Wyjw", "field012",
-        "Jtnem8qs", "R3UqL3Vm", "field004", "Sg5vqjRr", "DPNDusA2", "95jUV2Mb",
-        "field038", "NnkkhDGK",
-    )
-    parent = get_task_info(page, team_uuid, parent_task_uuid)
-    parent_fv = {f.get("field_uuid"): f for f in (parent or {}).get("field_values", [])}
+    if parent_fv is None:
+        parent_fv = get_parent_field_values(page, team_uuid, parent_task_uuid)
     if sample_defect_uuid:
         r = _api(page, "POST", f"/project/api/project/team/{team_uuid}/tasks/info", {"ids": [sample_defect_uuid]})
         sample = (r or {}).get("tasks", [{}])[0]

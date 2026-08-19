@@ -4,6 +4,11 @@
 
 产品 → 工艺路线（含工序）→ 产品 BOM。
 
+## 一键造数脚本
+
+`python scripts/bbt_osd_setup.py`（幂等，一次登录自动造 产品 → 工艺路线(工序) → BOM，已存在自动跳过）。
+公共辅助在 `scripts/bbt_osd_common.py`（登录/导航/下拉/表单/表格/造数）。
+
 ## 页面地址（欧斯达 t-ousida）
 
 - 产品信息定义：`/master-data/product/product-message-definition/index`

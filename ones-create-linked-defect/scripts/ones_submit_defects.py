@@ -27,8 +27,7 @@ from ones_helpers import (  # noqa: E402
     dedup_check,
     disconnect,
     get_current_user,
-    get_parent_handlers,
-    get_task_required_fields,
+    get_parent_context,
     list_related_tasks,
 )
 
@@ -259,10 +258,9 @@ def main():
 
     pw, browser, ctx, page = connect()
     try:
-        req = get_task_required_fields(page, team, task)
+        req, parent_fv = get_parent_context(page, team, task)
         print("主工单:", req["number"], req["summary"])
-        front_uuid, back_uuid = get_parent_handlers(page, team, task)
-        handler = front_uuid if args.handler == "frontend" else (back_uuid or front_uuid)
+        handler = req["fields"]["frontend"] if args.handler == "frontend" else (req["fields"]["backend"] or req["fields"]["frontend"])
         current = get_current_user(page)
         print("当前登录账号:", current["name"], current["uuid"], "| 处理人:", handler)
 
@@ -279,6 +277,7 @@ def main():
                 sample_defect_uuid=args.sample_defect,
                 overrides=overrides,
                 severity_text=args.severity,
+                parent_fv=parent_fv,
             )
             number, uuid = create_linked_defect(
                 page, team, task, b["title"], fvs,
