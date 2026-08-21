@@ -212,7 +212,7 @@ def main():
     ap.add_argument("--sample-defect", default=None, help="可选：字段模板缺陷 uuid")
     ap.add_argument("--only", action="append", default=[], help="只提交指定编号，可重复")
     ap.add_argument("--bugs", default="", help="逗号分隔编号，支持数字简写")
-    ap.add_argument("--handler", choices=["backend", "frontend"], default="backend", help="处理人：后端/前端（默认后端）")
+    ap.add_argument("--handler", choices=["backend", "frontend"], help="处理人：后端/前端（默认后端；UI 展示/交互类缺陷提前端）")
     ap.add_argument("--severity", default=DEFAULT_SEVERITY, help="严重程度（默认一般）")
     ap.add_argument("--dry-run", action="store_true", help="只解析校验不建单")
     ap.add_argument("--skip-evidence", action="store_true", help="跳过证据补传")

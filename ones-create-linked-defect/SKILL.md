@@ -80,6 +80,11 @@ description: >-
      2. 之后全部走 `build_defect_fields()`（主工单取来源项目/功能模块/产品负责人/优先级，
         同类型缺陷模板取系统环境等；处理人按 UI 前端→前端人员、其余→后端人员规则）
         + `create_linked_defect()` 创建并关联，或直接用 `ones_submit_defects.py --profile <项目> --bug-report <清单> --work-order <工单URL>` 批量提交。
+     **处理人选择规则（必读）**：
+     - UI 展示/交互类缺陷（字段显示、字段带出、界面交互、样式）→ 提缺陷命令加 `--handler frontend`，处理人提前端人员；
+     - 数据/逻辑/后端类缺陷 → 默认 `--handler backend`（或省略），处理人提后端人员。
+     例：`ones_submit_defects.py --profile aolian --bug-report <清单> --work-order <URL> --handler frontend`
+     已建单需改处理人时，用 `ones_helpers` 调 `tasks/update` 改 `95jUV2Mb`（处理人字段）为目标人员 uuid。
    - UI 弹窗仅作兜底（弹窗/字段交互细节见 `references/ones-ui.md`；稳定版交互统一用 `ones_helpers.set_select_option / set_desc / upload_evidence / submit_defect`）：
    - 工单详情弹窗 → 页签"关联内容" → 按钮"新建关联工作项"。
    - 工作项类型下拉（占位"请选择类型"）→ 搜索"缺陷" → 点选项。

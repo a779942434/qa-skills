@@ -13,6 +13,7 @@ assignee: ""
 #   UI 前端类 bug → 主工单"前端人员"（ones_helpers.get_parent_handlers 返回第 1 项）
 #   其余类 bug → 主工单"后端人员"（同上第 2 项）
 #   field-mapping.handler 即"主工单后端人员"的语义（动态获取）
+# 提缺陷时 UI 展示/交互类缺陷用 --handler frontend（提前端人员）；数据/逻辑类默认后端
 handler: ""
 
 # 产品负责人：默认取主工单产品负责人（动态，不在此配置）
@@ -72,6 +73,7 @@ aolian:
     backend_uuid: "1vmJxxsw"
     frontend: "王斌"
     frontend_uuid: "JGwXEzXq"
+  issue_type_scope_uuid: "M33Rzztq"   # 缺陷工作项类型 scope（同团队 2YPZxEgX）
   severity:
     s2: "严重"
     s3: "一般"

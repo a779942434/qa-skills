@@ -133,3 +133,37 @@ AL 定制版还有设备级「计划切换」；本功能用「产线计划切�
 切页签/打开弹窗/刷卡提交后，不要固定 wait 8~10s，用 `scripts/api_wait.py`：
 操作前 `base = watcher.snapshot()`，操作后 `new = watcher.wait_new(base, timeout=15)`，
 等新接口返回后再读 `.content-item` / `.total-count` / toast。
+
+
+## 计划切换弹窗交互纪律（2026-08-21 重测增补）
+
+实测发现：弹窗为 Vue 自定义组件，自动化交互存在以下坑，必须遵守：
+
+1. **页签切换**：先用 active class 读当前激活页签，**目标页签已激活则不重复点击**（重复点击已激活页签会导致内容错乱，显示其它页签数据）；未激活时用
+   `el.dispatchEvent(new MouseEvent('click', {bubbles:true}))` 切换。
+2. **切换后必须等「目标数据特征」**：等 content-list 出现目标工单编号或预期卡片数（轮询 `card_texts()`），**禁止固定 sleep**；
+   等不到说明接口未返回或状态错乱，按失败处理，不硬读。
+3. **卡片选中用多方式重试**：优先 `card.querySelector('.el-checkbox').click()`，失败换 Playwright `force click` 卡片/checkbox；
+   **每次尝试后验证 `.selected-count` 变为「1 条」才继续**，最多 3~6 次，仍失败即判失败。
+4. **「刷新」按钮可能使内容不可控**：页签数据异常时优先「切走再切回」或改用接口只读核验，慎用刷新。
+5. **操作成功判定以数据状态变化为准**：计划切换/暂停/重启/卸载成功后，目标页签的卡片集合应变化（如切换后原当前计划自动进入暂停页签）；
+   toast（切换成功/暂停成功等）仅作辅助，不作为唯一判定。
+
+代码骨架（健壮选中）：
+```python
+def select_card_robust(ipc, gd, attempts=6):
+    for _ in range(attempts):
+        info = card_texts(ipc)
+        idx = next((i for i, c in enumerate(info["cards"]) if f"工单编号: | {gd}" in c), -1)
+        if idx < 0:
+            return False
+        # 方法A checkbox JS click
+        ipc.frames[0].locator(".production-line-plan-switch-dialog").first.evaluate(
+            "(i)=>{const it=[...document.querySelectorAll('.production-line-plan-switch-dialog .content-item')];"
+            "if(it[i]){const cb=it[i].querySelector('.el-checkbox');if(cb)cb.click();}}", idx)
+        ipc.wait_for_timeout(1200)
+        if "1 条" in card_texts(ipc)["selected"]:
+            return True
+        # 方法B/C: Playwright force click checkbox / 卡片（省略，思路同）
+    return False
+```
