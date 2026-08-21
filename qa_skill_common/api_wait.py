@@ -94,3 +94,68 @@ def wait_any_api(page, keyword=None, timeout=15.0, interval=0.3):
 
 if __name__ == "__main__":
     print("api_wait 可用：ApiWatcher(page) -> snapshot() -> 操作 -> wait_new(base)")
+
+
+def confirm_action(page, action, watcher=None, keyword=None, timeout=15.0,
+                   toast_selector=".el-message, .el-notification, .el-message-box"):
+    """统一操作判定：执行操作 → 等新业务接口返回 → 收集错误与页面提示。
+
+    解决"操作后盲目 sleep / 提前读 DOM"的问题：
+    - 无新响应 = 操作未生效（按钮没点中/请求被拦截），按失败处理，不硬读页面；
+    - 有 HTTP>=400 新响应 = 接口失败，结果带原因。
+
+    用法：
+        w = ApiWatcher(page)
+        base = w.snapshot()                       # 操作前基线（可省略，函数内会自动取）
+        result = confirm_action(page, lambda: click_action(...))
+        if not result["ok"]:
+            # result["errors"] 可直接进缺陷清单；不继续断言页面
+        # ok 后再读 DOM 断言
+
+    返回 dict：
+        ok            操作是否生效（等到新接口且无 HTTP>=400 新响应）
+        new_responses 操作后新响应列表
+        errors        操作期间错误（HTTP>=400 响应 + 页面提示 toast）
+        toasts        操作后页面可见提示文本
+    """
+    if watcher is None:
+        watcher = ApiWatcher(page)
+    base = watcher.snapshot()
+    err_http = []
+
+    def on_resp(resp):
+        try:
+            if resp.status >= 400:
+                err_http.append((resp.status, resp.url[:200]))
+        except Exception:
+            pass
+
+    page.on("response", on_resp)
+    try:
+        action()
+        new = watcher.wait_new(base, keyword=keyword, timeout=timeout)
+    finally:
+        try:
+            page.remove_listener("response", on_resp)
+        except Exception:
+            pass
+
+    toasts = []
+    try:
+        for m in page.locator(toast_selector).all():
+            try:
+                if m.is_visible():
+                    t = (m.inner_text() or "").strip()
+                    if t and t not in toasts:
+                        toasts.append(t[:200])
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    err_http_new = [(s, u) for s, u in err_http if u not in set(r["url"] for r in base)]
+    ok = bool(new) and not err_http_new
+    return {"ok": ok, "new_responses": new, "errors": err_http_new, "toasts": toasts}
+
+
+__all__ = ["ApiWatcher", "wait_any_api", "confirm_action"]

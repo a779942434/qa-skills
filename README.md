@@ -29,6 +29,19 @@ cp -R web-blackbox-testing ~/.codex/skills/
 cp -R ones-create-linked-defect ~/.codex/skills/
 ```
 
+## 同步到 Codex 技能库（必做）
+
+Codex 实际加载 `~/.codex/skills/` 下的独立副本，与仓库**不同步**。改完仓库后执行一次即可让 Codex 用上新版本：
+
+```bash
+./sync-skills.sh            # 正式同步
+./sync-skills.sh --dry-run  # 只预览不执行
+```
+
+- 同步目录：`web-blackbox-testing/`、`qa_skill_common/`、`ones-create-linked-defect/`、`generate-manufacturing-test-cases/`
+- 保留目标侧本地文件（如 `scripts/config/databases.yaml`），不会误删；目标目录可用 `CODEX_SKILLS_DIR` 覆盖
+- 需要沙箱外权限（写入 `~/.codex/skills`）
+
 ## 知识库归档
 
 测试产出按日期归档到 `knowledge-base/`：

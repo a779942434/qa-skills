@@ -147,6 +147,10 @@ description: >-
   常见场景：打开弹窗 → 等新查询接口 → dump 结构；切页签 → 等新列表接口 → 读卡片；刷卡提交 → 等提交接口 → 断言 toast/状态。
 - 表格按列头读取，不硬编码 `td` 索引。
 - 截图语义化，缺陷现场必须保留。
+- **一次会话跑完全流程**：用 `scripts/session_helpers.py` 启动/连接常驻浏览器，一个长脚本跑完所有用例；一个会话只有一个持有者操作页面，收尾 `close_session` 清理标签页（避免多 playwright 客户端并发操作同一页面）。
+- **失败分级（防无限重试）**：环境失败（接口 502/超时/网络错误）→ 标记环境观察，立即跳过，不重试；业务失败（页面明确报错提示）→ 才算失败，重试最多 1 次。
+- **侦察→固化→引用纪律**：同一页面结构侦察最多 2 次；遇到新交互方式（如自定义弹窗/刷卡层）先补进 references 再继续，禁止反复 dump 同一页面。
+- **报告/缺陷清单自动生成**：执行脚本用 `scripts/report_gen.py` 从用例结果直接生成报告/缺陷清单骨架，AI 只补分析与定级；测试改数据后用 `scripts/data_cleanup.py` 对比基线并留痕（已恢复/未恢复）。
 
 ## 测试工具箱（scripts/）
 
@@ -168,7 +172,13 @@ description: >-
 - `scripts/api_wait.py`：接口观测等待（核心等待方式，替代固定 sleep）。
   - `ApiWatcher(page)`：挂 response 监听（覆盖所有 frame）；
   - `snapshot()`：操作前取响应基线；`wait_new(base, keyword=None, timeout=15)`：等基线之后出现新响应（可用 URL 关键词缩小范围）；
+  - `confirm_action(page, action, keyword=None)`：统一操作判定（执行操作→等新接口→收集 HTTP≥400 与 toast→返回 ok/errors），失败原因可直接进缺陷清单；
   - 业务不同无需预知接口路径，靠基线对比动态识别；无新响应 = 操作未生效。
+- `scripts/session_helpers.py`：一次会话常驻浏览器助手。
+  - `launch_session(headless, cdp_port)`：启动新 Chromium（可暴露 CDP 端口）；`connect_session(cdp_url, url_contains)`：连接常驻浏览器并复用已有页面；
+  - `close_session(...)`：收尾清理标签页；约定一个会话一个持有者。
+- `scripts/report_gen.py`：报告/缺陷清单骨架生成（`gen_report` / `gen_bug`），执行脚本直接喂结果生成 markdown，AI 只补分析。
+- `scripts/data_cleanup.py`：数据基线对比与清理留痕（`compare_state` / `write_cleanup_note`），测试后必须对比并记录已恢复/未恢复。
 - `scripts/ipc_helpers.py`：IPC 单机/产线界面导航辅助。
   - `unlock_ipc(page, system_password, base_url)`：进入 `/ipc/setting` 并解锁；
   - `select_station_and_save(page, station)`：精确选站并保存配置；
