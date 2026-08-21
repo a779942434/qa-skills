@@ -1,41 +1,16 @@
 # -*- coding: utf-8 -*-
-"""通用页面侦察：dump URL/标题/按钮/表格/行/可见弹窗。
-用法: python recon_page.py --url <页面URL>
+"""兼容入口：通用页面侦察实现已迁移至 qa_skill_common。
+
+原命令保持不变：`python scripts/recon-generic/recon_page.py --url <页面URL>`。
 """
-import argparse
-import json
-import sys
 from pathlib import Path
+import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from playwright.sync_api import sync_playwright
-from bbt_osd_common import login_ousida, goto
-from bbt_helpers import recon_page_structure
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--url", required=True)
-    args = ap.parse_args()
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        page = browser.new_context(viewport={"width": 1680, "height": 950}, locale="zh-CN").new_page()
-        try:
-            login_ousida(page)
-            goto(page, args.url)
-            s = recon_page_structure(page)
-            print("URL:", s["url"])
-            print("TITLE:", s["title"])
-            print("按钮:", json.dumps(s["buttons"], ensure_ascii=False))
-            print("表头:", s["headers"])
-            print("行数:", len(s["rows"]))
-            for r in s["rows"]:
-                print("  行:", r)
-            print("弹窗:")
-            for d in s["dialogs"]:
-                print("  ", d)
-        finally:
-            browser.close()
+from qa_skill_common.recon_generic.recon_page import main
 
 
 if __name__ == "__main__":

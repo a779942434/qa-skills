@@ -101,3 +101,35 @@
 | 上班打卡 | 当前班次打卡表为空时，点 `button.start-work-btn` → 刷卡 `1` → 如有人员选择则选人确认 | 打卡表新增记录：上班时间已填、下班时间 `--`、操作「下班」 |
 
 上班打卡后可能弹出「送检提醒」，按需求关闭或处理，不影响交接班主流程。
+
+## 产线计划切换弹窗（产线界面-AL / 计划切换，2026-08-21 固化）
+
+入口：产线界面 `/ipc/line` 底部「产线计划切换」（注意不是「计划切换」入口，
+AL 定制版还有设备级「计划切换」；本功能用「产线计划切换」）。
+点击后打开自定义弹窗组件 `.production-line-plan-switch-dialog`（非 el-dialog）。
+
+### 弹窗结构
+- 页签：`.tab-item`（待用计划 / 当前计划 / 暂停计划），**默认激活「当前计划」**。
+- 统计：`.total-count`（共计 N 条记录）、`.selected-count`（您已经选中了 N 条记录）。
+- 列表：`.content-list > .content-item`（卡片式，非 el-table）；每卡片含
+  `.checkbox-wrapper .el-checkbox` 与 `.item-content`（字段 label/value）。
+  当前/暂停计划卡片字段含「工单编号」（位置靠后），待用计划卡片含「工单编号」。
+- 操作按钮：`.action-button`（div，非 button 标签），未选中时带 `disabled` class。
+  - 待用计划页签：刷新 / 切换历史 / 计划切换
+  - 当前计划页签：刷新 / 切换历史 / 卸载计划 / 暂停计划
+  - 暂停计划页签：刷新 / 暂停重启历史 / 重启计划 / 卸载计划
+
+### 稳定交互方式（代理/headless 下实测）
+- 页签切换：`el.dispatchEvent(new MouseEvent('click', {bubbles:true}))` 有效；
+  Playwright 原生坐标 click 可能被常驻「异常上报(自动)」弹窗遮挡而超时。
+- 卡片选中：优先点击卡片内 `.el-checkbox`（`card.querySelector('.el-checkbox').click()`）；
+  直接点 `.content-item` 偶发不触发（selected 不更新）。
+- 操作按钮：`.action-button` 上执行 `btn.click()`。
+- 常驻遮挡：页面存在「异常上报(自动)」弹窗（测试造数产生），会拦截坐标点击；
+  自动化前可先移除：`[...document.querySelectorAll('[class*=dialog]')].filter(e=>e.innerText.includes('异常上报')).forEach(e=>e.remove())`。
+- 刷卡：点按钮后轮询页面文本出现「请在右下角刷您的工卡」再 `page.keyboard.type("1")`。
+
+### 接口等待（替代固定 sleep）
+切页签/打开弹窗/刷卡提交后，不要固定 wait 8~10s，用 `scripts/api_wait.py`：
+操作前 `base = watcher.snapshot()`，操作后 `new = watcher.wait_new(base, timeout=15)`，
+等新接口返回后再读 `.content-item` / `.total-count` / toast。

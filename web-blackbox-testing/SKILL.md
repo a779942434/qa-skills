@@ -138,6 +138,13 @@ description: >-
 
 - 复用已有页面，不重复多开。
 - 优先条件等待，不用长时间固定 sleep。
+- **接口观测等待（必做）**：页面数据是接口返回后渲染的，操作后先等"业务接口返回"再断言页面数据，禁止直接固定 sleep 或立即读 DOM 下结论。
+  通用四步（业务不同无需预知接口路径，工具见 `scripts/api_wait.py`）：
+  1. 操作前 `base = watcher.snapshot()` 记录响应基线；
+  2. 执行操作（切页签/提交/刷卡/刷新）；
+  3. `new = watcher.wait_new(base, timeout=15)` 等基线之后出现新响应；无新响应 = 操作未生效（按钮没点中/请求被拦截），按失败处理，不硬读页面；
+  4. 少量渲染余量（~500ms）后再读 DOM 断言。
+  常见场景：打开弹窗 → 等新查询接口 → dump 结构；切页签 → 等新列表接口 → 读卡片；刷卡提交 → 等提交接口 → 断言 toast/状态。
 - 表格按列头读取，不硬编码 `td` 索引。
 - 截图语义化，缺陷现场必须保留。
 
@@ -158,6 +165,10 @@ description: >-
   - `table_columns()` / `read_table_rows()`：按列头读表格；
   - `snap(page, name, out_dir, feature)`：语义化截图命名；
   - `record_baseline()` / `assert_new_target()`：数据基线记录与核对。
+- `scripts/api_wait.py`：接口观测等待（核心等待方式，替代固定 sleep）。
+  - `ApiWatcher(page)`：挂 response 监听（覆盖所有 frame）；
+  - `snapshot()`：操作前取响应基线；`wait_new(base, keyword=None, timeout=15)`：等基线之后出现新响应（可用 URL 关键词缩小范围）；
+  - 业务不同无需预知接口路径，靠基线对比动态识别；无新响应 = 操作未生效。
 - `scripts/ipc_helpers.py`：IPC 单机/产线界面导航辅助。
   - `unlock_ipc(page, system_password, base_url)`：进入 `/ipc/setting` 并解锁；
   - `select_station_and_save(page, station)`：精确选站并保存配置；
