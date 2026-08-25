@@ -38,10 +38,10 @@ DEFAULT_SETTINGS = {
 DEFAULT_FIELD_MAPPING = {
     "priority": "P2",
     "assignee": "",
-    "handler": "施锦涛",
-    "source_project": {"keyword": "可挺", "name": "宁波可挺-1期|KH0094-01"},
-    "system_env": {"keyword": "可挺", "name": "t-keting-可挺集成测试（客户侧）"},
-    "function_modules": ["计划管理", "APS模块（自动排产）"],
+    "handler": "",   # 处理人动态取自工单；此处不预设姓名
+    "source_project": {"keyword": "<客户关键词>", "name": "<客户名>-1期|<项目编码>"},
+    "system_env": {"keyword": "<环境关键词>", "name": "<环境名>（<环境归属>）"},
+    "function_modules": ["计划管理"],
     "evidence_dirs": {},
 }
 
@@ -97,8 +97,19 @@ def load_settings():
 
 
 def load_field_mapping():
-    """读取 field-mapping.yaml（已与内置默认合并）。"""
-    return _read_yaml("field-mapping.yaml", DEFAULT_FIELD_MAPPING)
+    """读取 field-mapping.yaml（已与内置默认合并），再用本地覆盖文件合并。
+
+    优先级（高 -> 低）：
+        config/field-mapping.local.yaml > config/field-mapping.yaml > 内置默认
+    本地覆盖文件不存在时静默跳过。
+    """
+    merged = _read_yaml("field-mapping.yaml", DEFAULT_FIELD_MAPPING)
+    local_path = CONFIG_DIR / "field-mapping.local.yaml"
+    if yaml is not None and local_path.exists():
+        with open(local_path, encoding="utf-8") as fh:
+            local_data = yaml.safe_load(fh) or {}
+        merged = _deep_merge(merged, local_data)
+    return merged
 
 
 def default_edge_executable():

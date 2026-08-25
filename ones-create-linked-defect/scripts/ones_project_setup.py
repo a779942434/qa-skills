@@ -87,13 +87,13 @@ def main():
             print(yaml.safe_dump({args.profile: profile}, allow_unicode=True, sort_keys=False))
             return
 
-        path = PROJECT_ROOT / "config" / "field-mapping.yaml"
+        path = PROJECT_ROOT / "config" / "field-mapping.local.yaml"
         block = yaml.safe_dump({args.profile: profile}, allow_unicode=True, sort_keys=False)
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(f"\n# ============ {args.profile}（由 ones_project_setup 生成，请补 keyword/site.url） ============\n")
             fh.write(block)
         print("已写入 profile:", args.profile, "->", path)
-        print("提示：检查 field-mapping.yaml 新增段，补 source_project.keyword、function_module.keyword/name 等可读字段。")
+        print("提示：检查 field-mapping.local.yaml 新增段，补 source_project.keyword、function_module.keyword/name 等可读字段。")
     finally:
         disconnect(pw)
 

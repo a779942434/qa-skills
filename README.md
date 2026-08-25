@@ -36,6 +36,8 @@ Codex 实际加载 `~/.codex/skills/` 下的独立副本，与仓库**不同步*
 ```bash
 ./sync-skills.sh            # 正式同步
 ./sync-skills.sh --dry-run  # 只预览不执行
+./sync-skills.sh --purge    # 同步并删除目标侧「仓库没有」的文件（白名单除外）
+./sync-skills.sh --dry-run --purge  # 先预览将删除的文件
 ```
 
 - 同步目录：`web-blackbox-testing/`、`qa_skill_common/`、`ones-create-linked-defect/`、`generate-manufacturing-test-cases/`
@@ -51,5 +53,6 @@ Codex 实际加载 `~/.codex/skills/` 下的独立副本，与仓库**不同步*
 
 ## 注意事项
 
-- `ones-create-linked-defect/config/field-mapping.yaml` 含项目、人员、字段 uuid 等客户侧配置，公开仓库前请先脱敏或改写成通用模板。
+- `ones-create-linked-defect/config/field-mapping.yaml` 是通用模板（不含客户数据）；真实的项目、人员、字段 uuid 等配置放在本机 `config/field-mapping.local.yaml`（已 gitignore，不随仓库分发）。
+- `--purge` 会删除目标侧仓库没有的文件，但保留本地运行时文件（`databases.yaml`、`bug-reports/`、`test-reports/`、`field-mapping.local.yaml` 等），使用前建议先 `--dry-run --purge` 预览。
 - 数据库凭据、浏览器登录会话等敏感信息不在本仓库内（放在本机 `~/.codex/` 下），请勿提交。
