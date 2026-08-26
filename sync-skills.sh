@@ -21,7 +21,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_SKILLS_DIR="${CODEX_SKILLS_DIR:-$HOME/.codex/skills}"
 
 # 仓库中需要同步到 Codex 的技能/公共包目录（按需增删）
-SYNC_DIRS=(web-blackbox-testing qa_skill_common ones-create-linked-defect generate-manufacturing-test-cases)
+SYNC_DIRS=(web-blackbox-testing qa_skill_common ones-create-linked-defect generate-manufacturing-test-cases generate-arun-api-scripts)
 
 DRY_RUN=0
 PURGE=0

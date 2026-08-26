@@ -11,6 +11,7 @@
 | `web-blackbox-testing/` | Web 黑盒测试 | 无源码场景下黑盒测试 / 冒烟 / 回归验证，产出缺陷清单 |
 | `ones-create-linked-defect/` | ONES 缺陷全流程 | 把缺陷清单录入 ONES、回归后关闭 / 评论 @处理人、流转主工单 |
 | `qa_skill_common/` | 跨技能公共实现 | 集中维护浏览器辅助、MES 登录/造数与通用页面侦察，供后两个技能复用 |
+| `generate-arun-api-scripts/` | ARun 接口脚本生成 | 从 OpenAPI/Swagger + 业务流程生成可粘贴到 ARun 的接口脚本 JSON |
 
 ## 完整链路
 
@@ -27,6 +28,7 @@ cp -R generate-manufacturing-test-cases ~/.codex/skills/
 cp -R qa_skill_common ~/.codex/skills/
 cp -R web-blackbox-testing ~/.codex/skills/
 cp -R ones-create-linked-defect ~/.codex/skills/
+cp -R generate-arun-api-scripts ~/.codex/skills/
 ```
 
 ## 同步到 Codex 技能库（必做）
@@ -40,7 +42,7 @@ Codex 实际加载 `~/.codex/skills/` 下的独立副本，与仓库**不同步*
 ./sync-skills.sh --dry-run --purge  # 先预览将删除的文件
 ```
 
-- 同步目录：`web-blackbox-testing/`、`qa_skill_common/`、`ones-create-linked-defect/`、`generate-manufacturing-test-cases/`
+- 同步目录：`web-blackbox-testing/`、`qa_skill_common/`、`ones-create-linked-defect/`、`generate-manufacturing-test-cases/`、`generate-arun-api-scripts/`
 - 保留目标侧本地文件（如 `scripts/config/databases.yaml`），不会误删；目标目录可用 `CODEX_SKILLS_DIR` 覆盖
 - 需要沙箱外权限（写入 `~/.codex/skills`）
 

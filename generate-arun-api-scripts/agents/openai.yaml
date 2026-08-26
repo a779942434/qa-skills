@@ -1,0 +1,4 @@
+interface:
+  display_name: "ARun 接口脚本生成"
+  short_description: "从 Swagger/OpenAPI 与业务流程生成 ARun 可粘贴接口脚本 JSON"
+  default_prompt: "Use $generate-arun-api-scripts 根据 OpenAPI 文档与业务流程生成 ARun 接口脚本 JSON。"
