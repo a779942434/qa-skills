@@ -4,27 +4,37 @@
 用法：
     python build_arun.py steps.json -o arun_script.json
     python build_arun.py steps.yaml --compact          # 有 pyyaml 时也支持 YAML
-    python build_arun.py steps.json                    # 输出到 stdout
+    python build_arun.py steps.json                    # 默认输出到桌面 ~/Desktop/<步骤名>_arun.json
+    python build_arun.py steps.json -o -               # 输出到 stdout
+    python build_arun.py - -o arun_script.json         # 从 stdin 读取步骤清单
 
-步骤清单是 JSON 数组，每个元素有两种：
-1. 纯脚本步骤：{"name": "...", "script": "<python>"}
+步骤清单是 JSON 数组，每个元素有三种：
+1. 纯脚本步骤：{"name": "...", "script": "<python>", "ignore": false}
 2. 接口步骤：{
        "name": "...",
        "desc": "...",                # 可选
        "method": "POST",             # 可选，默认 POST
        "url": "/linkim-pc/...",
-       "body": {...},                # data.body.json 内容
+       "body": {...},                # data.body.json 内容；整值透传时写 "$var"
        "setup_code": "...",          # 可选，脚本自动加首行注释
-       "teardown_code": "..."        # 可选，脚本自动加首行注释
+       "teardown_code": "...",       # 可选，脚本自动加首行注释
+       "project": 13,                # 可选，覆盖默认 project
+       "json2text": true,            # 可选，写入 data.json2text（整值透传）
+       "ignore": false               # 可选
    }
+3. 控制流步骤：{"controller": "for"|"if", "steps": [...], 其余控制器字段原样保留}
+   - for：mode / times / interval / break_on_success / continue_on_failure / close
+   - if：condition / elif_branches / else_steps / elseClose / ignore / close
+   - 嵌套 steps 同样支持脚本 / 接口 / 控制流步骤（可递归）
 
 脚本会自动补齐 sample 里的全部默认字段（dubbo/params/headers 等），
-省略平台自增字段，并校验 body 里的 $var 是否由前序步骤产生。
+省略平台自增字段，并校验 body 与 url 里的 $var 是否由前序步骤产生。
 """
 
 import argparse
 import copy
 import json
+import pathlib
 import re
 import sys
 
@@ -160,6 +170,11 @@ def build_api_step(spec):
             "url": url,
         }
     )
+    # 可选覆盖：project（默认 13）、ignore
+    if "project" in spec:
+        step["project"] = spec["project"]
+    if "ignore" in spec:
+        step["ignore"] = spec["ignore"]
     data.update(
         {
             "url": url,
@@ -167,6 +182,13 @@ def build_api_step(spec):
         }
     )
     data["body"]["json"] = copy.deepcopy(spec.get("body", {}))
+
+    # 整值透传：data.json2text（顶层 json2text 或 data.json2text 均可）
+    json2text = spec.get("json2text")
+    if json2text is None and isinstance(spec.get("data"), dict):
+        json2text = spec["data"].get("json2text")
+    if json2text:
+        data["json2text"] = True
 
     if spec.get("setup_code"):
         data["setup_code"] = (
@@ -184,13 +206,39 @@ def build_api_step(spec):
 def build_script_step(spec):
     if not spec.get("script"):
         raise ValueError("脚本步骤必须有 script")
-    return {"script": spec["script"], "name": spec.get("name", "脚本步骤")}
+    step = {"script": spec["script"], "name": spec.get("name", "脚本步骤")}
+    if "ignore" in spec:
+        step["ignore"] = spec["ignore"]
+    return step
+
+
+def build_controller_step(spec):
+    controller = spec.get("controller")
+    if controller not in ("for", "if", "while"):
+        raise ValueError(f"未知 controller: {controller}")
+    step = {"controller": controller}
+    for key, value in spec.items():
+        if key in ("controller", "steps", "elif_branches", "else_steps"):
+            continue
+        step[key] = copy.deepcopy(value)
+    step["steps"] = build_steps(spec.get("steps", []))
+    elif_branches = []
+    for br in spec.get("elif_branches", []):
+        branch = copy.deepcopy(br) if isinstance(br, dict) else br
+        if isinstance(branch, dict) and "steps" in branch:
+            branch["steps"] = build_steps(branch["steps"])
+        elif_branches.append(branch)
+    step["elif_branches"] = elif_branches
+    step["else_steps"] = build_steps(spec.get("else_steps", []))
+    return step
 
 
 def build_steps(specs):
     steps = []
     for spec in specs:
-        if "script" in spec:
+        if "controller" in spec:
+            steps.append(build_controller_step(spec))
+        elif "script" in spec:
             steps.append(build_script_step(spec))
         else:
             steps.append(build_api_step(spec))
@@ -200,26 +248,43 @@ def build_steps(specs):
 def validate_vars(specs):
     known = set()
     problems = []
-    for i, spec in enumerate(specs):
-        label = spec.get("name", f"步骤{i + 1}")
-        if "script" in spec:
-            known |= find_set_vars(spec.get("script"))
-            continue
-        known |= find_set_vars(spec.get("setup_code"))
-        needed = find_body_vars(spec.get("body", {}))
-        missing = sorted(needed - known)
-        if missing:
-            problems.append((label, missing))
-        known |= find_set_vars(spec.get("teardown_code"))
+
+    def walk(specs):
+        nonlocal known, problems
+        for i, spec in enumerate(specs):
+            label = spec.get("name", f"步骤{i + 1}")
+            if "controller" in spec:
+                walk(spec.get("steps", []))
+                for br in spec.get("elif_branches", []):
+                    if isinstance(br, dict):
+                        walk(br.get("steps", []))
+                walk(spec.get("else_steps", []))
+                continue
+            if "script" in spec:
+                known |= find_set_vars(spec.get("script"))
+                continue
+            known |= find_set_vars(spec.get("setup_code"))
+            needed = find_body_vars(spec.get("body", {}))
+            needed |= find_body_vars(spec.get("url", ""))
+            missing = sorted(needed - known)
+            if missing:
+                problems.append((label, missing))
+            known |= find_set_vars(spec.get("teardown_code"))
+
+    walk(specs)
     return problems
 
 
 def load_spec(path):
-    text = open(path, "r", encoding="utf-8").read()
-    if path.endswith((".yaml", ".yml")) and yaml is not None:
-        data = yaml.safe_load(text)
-    else:
+    if path == "-":
+        text = sys.stdin.read()
         data = json.loads(text)
+    else:
+        text = open(path, "r", encoding="utf-8").read()
+        if path.endswith((".yaml", ".yml")) and yaml is not None:
+            data = yaml.safe_load(text)
+        else:
+            data = json.loads(text)
     if not isinstance(data, list):
         raise ValueError("步骤清单必须是 JSON 数组")
     return data
@@ -249,14 +314,20 @@ def main(argv=None):
     json.loads(text)  # 最后兜底校验
 
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as f:
+        output_path = args.output
+    else:
+        stem = "arun_script" if args.spec == "-" else pathlib.Path(args.spec).stem
+        output_path = str(pathlib.Path.home() / "Desktop" / f"{stem}_arun.json")
+
+    if output_path == "-":
+        sys.stdout.write(text + "\n")
+    else:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(text + "\n")
         print(
-            f"生成成功：{len(steps)} 个步骤 -> {args.output}",
+            f"生成成功：{len(steps)} 个步骤 -> {output_path}",
             file=sys.stderr,
         )
-    else:
-        sys.stdout.write(text + "\n")
 
 
 if __name__ == "__main__":

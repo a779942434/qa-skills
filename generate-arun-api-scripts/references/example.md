@@ -31,7 +31,7 @@
 ]
 ```
 
-运行：`python scripts/build_arun.py steps.json -o arun_script.json`
+运行：`python3 generate-arun-api-scripts/scripts/build_arun.py steps.json`（默认生成到桌面 `~/Desktop/steps_arun.json`）
 
 ## 变量链
 
