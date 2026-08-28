@@ -12,6 +12,7 @@
 """
 import argparse
 import json
+import glob
 import re
 import sys
 from pathlib import Path
@@ -58,22 +59,25 @@ def expand_keys(tokens):
 
 
 def parse_bug_report(md_path):
+    """解析缺陷清单，兼容两种标题格式：
+       ### BUG-编号：标题
+       ## BUG-编号【严重程度】标题
+    都会去掉【严重程度】前缀，并按行提取证据文件。"""
     text = Path(md_path).read_text(encoding="utf-8")
-    blocks = re.split(r"(?m)^### ", text)
+    headers = list(re.finditer(r"(?m)^#{2,3}\s*(BUG-[A-Za-z0-9-]+)\s*(?:【[^】]*】)?\s*([^\n]+)", text))
     bugs = []
-    for b in blocks[1:]:
-        m = re.match(r"(BUG-[A-Za-z0-9-]+)[：:]\s*(.+)", b.strip())
-        if not m:
-            continue
+    for i, m in enumerate(headers):
         key, title = m.group(1), m.group(2).strip()
+        end = headers[i + 1].start() if i + 1 < len(headers) else len(text)
+        body = text[m.end():end]
         evidence = []
-        for em in re.finditer(r"(?m)^\s*[-*]\s*(.+)$", b):
+        for em in re.finditer(r"(?m)^\s*[-*]\s*(.+)$", body):
             line = re.sub(r"^证据[:：]\s*", "", em.group(1).strip())
             for tok in re.split(r"[\s、,，]+", line):
                 tok = tok.strip()
                 if re.search(r"\.(?:png|jpg|jpeg|gif|xlsx|csv|txt)$", tok, re.IGNORECASE):
                     evidence.append(tok)
-        bugs.append({"key": key, "title": title, "evidence": evidence, "desc": b.strip()})
+        bugs.append({"key": key, "title": title, "evidence": evidence, "desc": body.strip()})
     return bugs
 
 
@@ -132,9 +136,22 @@ def apply_overrides(field_values, overrides):
 def resolve_evidence(bug, base_dirs):
     found, missing = [], []
     for name in bug["evidence"]:
-        tokens = [t for t in re.split(r"\s+", name) if t]
+        # 支持多个文件用 空格/中英文顿号逗号分号 分隔
+        tokens = [t for t in re.split(r"[\s、,，;；]+", name) if t]
         hit = False
         for token in tokens:
+            # 支持通配符（如 template_*.xlsx / export_*.xlsx）
+            if "*" in token or "?" in token:
+                resolved = False
+                for base in base_dirs:
+                    hits = sorted(glob.glob(str(Path(base) / token)))
+                    if hits:
+                        found.extend(Path(h) for h in hits)
+                        resolved = True
+                        break
+                if resolved:
+                    hit = True
+                continue
             if not re.search(r"\.(?:png|jpg|jpeg|gif|xlsx|csv|txt)$", token):
                 continue
             p = Path(token)

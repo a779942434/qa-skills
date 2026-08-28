@@ -152,7 +152,7 @@ def get_current_user(page):
 
 # 缺陷创建白名单：只提交缺陷类型可写字段，避免把需求/模板冗余字段带进 add3
 DEFECT_FIELD_WHITELIST = (
-    "field001", "field002", "5nUKjALP", "W9qkyVXr", "Wq56Wyjw", "field012",
+    "field001", "field002", "field016", "5nUKjALP", "W9qkyVXr", "Wq56Wyjw", "field012",
     "Jtnem8qs", "R3UqL3Vm", "field004", "Sg5vqjRr", "DPNDusA2", "95jUV2Mb",
     "field038", "NnkkhDGK",
 )
@@ -754,7 +754,7 @@ def build_defect_fields(page, team_uuid, parent_task_uuid, summary, desc, handle
     返回可直接传给 create_linked_defect 的 field_values 数组。
     """
     FIELD_TYPES = {
-        "field001": 2, "field002": 2, "5nUKjALP": 1, "W9qkyVXr": 1,
+        "field001": 2, "field002": 2, "field016": 20, "5nUKjALP": 1, "W9qkyVXr": 1,
         "Wq56Wyjw": 8, "field012": 1, "Jtnem8qs": 1, "R3UqL3Vm": 1,
         "field004": 8, "Sg5vqjRr": 8, "DPNDusA2": 8, "95jUV2Mb": 8,
         "field038": 1, "NnkkhDGK": 1,
@@ -779,6 +779,10 @@ def build_defect_fields(page, team_uuid, parent_task_uuid, summary, desc, handle
         fv_map = {k: dict(v) for k, v in parent_fv.items() if k in DEFECT_FIELD_WHITELIST}
     if "field001" in fv_map:
         fv_map["field001"]["value"] = summary
+    # 描述字段：缺陷类型的描述为 field016（富文本 type 20），确保存在（兼容 field002 纯文本）
+    _desc_html = "".join("<p>" + p + "</p>" for p in desc.split(chr(10)) if p.strip()) or "<p></p>"
+    fv_map.setdefault("field016", {"field_uuid": "field016", "type": 20, "value": _desc_html, "value_type": 0, "date_value": ""})
+    fv_map["field016"]["value"] = _desc_html
     if "field002" in fv_map:
         fv_map["field002"]["value"] = desc
     if "95jUV2Mb" in fv_map:
