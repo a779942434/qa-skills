@@ -10,11 +10,12 @@
 
 用法示例见 web-blackbox-testing.md。
 """
+import os
 import time
 from datetime import datetime
 from pathlib import Path
 __all__ = [
-    "find_page", "connect", "disconnect", "attach_error_watchers",
+    "launch_mes_browser", "find_page", "connect", "disconnect", "attach_error_watchers",
     "collect_toasts", "error_report", "wait_visible", "wait_until", "retry",
     "close_dialog", "wait_text", "wait_button", "wait_toast",
     "table_columns", "read_table_rows", "snap", "record_baseline",
@@ -24,6 +25,45 @@ __all__ = [
 
 
 from playwright.sync_api import sync_playwright
+
+
+def _chrome_candidates():
+    """返回本机候选浏览器可执行文件（系统 Chrome/Edge/Chromium + 常见路径 + 环境变量覆盖）。"""
+    cands = []
+    env = os.environ.get("MES_BROWSER_PATH", "").strip()
+    if env:
+        cands.append(env)
+    cands += [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+    ]
+    return [c for c in cands if c and Path(c).exists()]
+
+
+def launch_mes_browser(pw, headless=True):
+    """启动浏览器用于被测 MES：优先 playwright 自带 chromium；缺失时自动回退本机系统 Chrome/Edge。
+
+    回退顺序：环境变量 MES_BROWSER_PATH > macOS Chrome/Edge/Chromium > Linux 常见路径。
+    全部不可用时抛出明确提示（不要自行 playwright install 下载）。
+    """
+    try:
+        return pw.chromium.launch(headless=headless, args=["--no-sandbox"])
+    except Exception:
+        pass
+    for exe in _chrome_candidates():
+        try:
+            return pw.chromium.launch(headless=headless, executable_path=exe, args=["--no-sandbox"])
+        except Exception:
+            continue
+    raise RuntimeError(
+        "playwright 自带 chromium 与本机系统 Chrome/Edge 均不可用："
+        "请安装 Chrome/Edge，或设置 MES_BROWSER_PATH 指定浏览器可执行文件"
+    )
 
 
 def find_page(ctx, url_contains=None, title_contains=None):

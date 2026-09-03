@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-"""欧斯达造数入口：一次登录按依赖顺序造 产品 → 工艺路线(工序) → BOM（幂等）。
+"""MES 造数入口（环境无关）：一次登录按依赖顺序造 产品 → 工艺路线(工序) → BOM（幂等）。
 
 通过兼容入口运行：`python scripts/bbt_osd_setup.py`。
 """
 from playwright.sync_api import sync_playwright
 
 from .bbt_osd_common import login_ousida, ensure_product, ensure_craft, ensure_proc, ensure_bom
+from .bbt_helpers import launch_mes_browser
 
 PRODUCT = "测试产品-QA0818"
 CODE = "QA0818"
@@ -16,7 +17,7 @@ BOMS = [("增白剂", 1, 2), ("DWY125K-01上盖", 1, 1)]
 
 def main():
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        browser = launch_mes_browser(pw)
         page = browser.new_context(viewport={"width": 1680, "height": 950}, locale="zh-CN").new_page()
         try:
             login_ousida(page)

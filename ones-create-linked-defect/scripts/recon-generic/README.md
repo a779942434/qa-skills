@@ -14,7 +14,11 @@ python recon_dropdown.py --url <页面URL> --button 新增         # dump 弹窗
 python recon_subtables.py --url <页面URL> --max-rows 5        # 点击每行主表行，dump 出现的子表
 ```
 
-登录：默认 admin / sygl123456（t-ousida Keycloak），在 `bbt_osd_common.py` 里改。
+登录与环境：不再写死 t-ousida。登录会自动按 `--url` 所在站点走 Keycloak；账号密码可用环境变量覆盖：
+- `MES_URL`：被测站点根地址（未设置时自动取 `--url` 的根地址）
+- `MES_ACCOUNT` / `MES_PASSWORD`：登录账号/密码（未设置会报明确提示）
+（兼容入口 `login_ousida` 名称保留，行为已环境无关化。）
+- 浏览器启动：优先 playwright 自带 chromium；缺失时自动回退本机系统 Chrome/Edge（可用 `MES_BROWSER_PATH` 指定可执行文件）。
 
 ## 通用要点（已在 common 固化）
 

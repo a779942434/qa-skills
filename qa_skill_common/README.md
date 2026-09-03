@@ -11,6 +11,21 @@
 | `bbt_osd_setup.py` | 产品、工艺路线、工序与 BOM 的一次性造数入口 |
 | `recon_generic/` | 页面、弹窗、下拉与主子表的四个参数化侦察命令 |
 
+## 环境配置（站点/账号不再写死）
+
+`bbt_osd_common` 不再把目标环境写死为 t-ousida，全部改为环境变量配置（留空即未配置，调用时会报明确提示）：
+
+| 环境变量 | 含义 | 示例 |
+| --- | --- | --- |
+| `MES_URL` | 被测 MES 站点根地址 | `http://t-dafu.ob.shuyilink.com` |
+| `MES_ACCOUNT` | Keycloak 登录账号 | `admin` |
+| `MES_PASSWORD` | Keycloak 登录密码 | 依环境而定 |
+
+说明：
+- `login_ousida(page, base_url=...)` 可传参指定站点；`recon-generic/*.py` 会自动按 `--url` 所在站点登录，未配置 `MES_URL` 也能用。
+- `login_for_page(page, target_url)`：优先 `MES_URL`，否则取目标页面根地址登录。
+- 兼容入口 `login_ousida` 名称保留，行为已环境无关化。
+
 ## 兼容约定
 
 各技能原有的 `scripts/bbt_helpers.py`、`scripts/bbt_osd_common.py`、`scripts/bbt_osd_setup.py` 和 `scripts/recon-generic/*.py` 均保留为**兼容入口**。既有命令和导入语句无需修改，例如：

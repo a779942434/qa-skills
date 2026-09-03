@@ -11,7 +11,9 @@
 `python scripts/bbt_osd_setup.py`（幂等，一次登录自动造 产品 → 工艺路线(工序) → BOM，已存在自动跳过）。
 公共辅助在 `scripts/bbt_osd_common.py`（登录/导航/下拉/表单/表格/造数）。
 
-## 页面地址（欧斯达 t-ousida）
+> 站点/账号不再写死：运行前设置环境变量 `MES_URL`、`MES_ACCOUNT`、`MES_PASSWORD`（如 `export MES_URL=http://t-ousida.ob.shuyilink.com`）。
+
+## 页面地址（相对路径，站点取 `MES_URL`）
 
 - 产品信息定义：`/master-data/product/product-message-definition/index`
 - 工艺路线定义：`/master-data/technology/process-route-definition/index`

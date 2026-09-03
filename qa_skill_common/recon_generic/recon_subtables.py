@@ -6,7 +6,8 @@ import argparse
 
 from playwright.sync_api import sync_playwright
 
-from ..bbt_osd_common import goto, login_ousida
+from ..bbt_osd_common import goto, login_for_page
+from ..bbt_helpers import launch_mes_browser
 
 
 def main():
@@ -15,10 +16,10 @@ def main():
     ap.add_argument("--max-rows", type=int, default=5)
     args = ap.parse_args()
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        browser = launch_mes_browser(pw)
         page = browser.new_context(viewport={"width": 1680, "height": 950}, locale="zh-CN").new_page()
         try:
-            login_ousida(page)
+            login_for_page(page, args.url)
             goto(page, args.url)
             n = page.locator(".el-table__row").count()
             print("主表行数:", n)
