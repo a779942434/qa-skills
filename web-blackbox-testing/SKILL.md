@@ -23,8 +23,8 @@ description: >-
 4. **侦察纪律**：同一页面侦察 ≤2 次，结果固化进 references 后直接引用；不重复 dump，不输出大段 DOM/表格/body 文本，日志只给结论/关键断言/截图文件名。
 5. **一次会话一个长脚本**：一次登录跑完本任务全部用例；不每个脚本重新登录/新起浏览器。
 6. **只做标准用户操作**（点击/键入/下拉选择）。**禁止** JS 注入改值、改 DOM/属性绕过校验、对 disabled 输入框强填、改遮挡元素层级；标准操作不可行时记录为「待确认/缺陷/环境观察」，**不许硬绕**。
-7. **失败分级**：接口 5xx/超时/网络错 = 环境观察，跳过不重试；页面明确报错 = 业务失败，重试 ≤1 次仍失败截图进缺陷清单；操作成功以数据状态变化为准，toast 仅辅助。
-8. **结束闸门**：清理本轮数据并与测试前基线对比留痕（已恢复/未恢复）；证据截图归档到 `bug-reports/<功能>/`，缺陷清单「证据」只写纯文件名；用 `ones_submit_defects.py` 提缺陷，缺主工单 URL 先问用户、**不许跳过**；报告/缺陷/用例归档到 `knowledge-base/` 对应目录。
+7. **失败分级**：接口 5xx/超时/网络错 = 环境观察，跳过不重试；页面明确报错 = 业务失败，重试 ≤1 次仍失败截图进缺陷清单；操作成功以数据状态变化为准，toast 仅辅助。**校验被拦截（有 toast/内联错误提示）= 已处理业务拦截，记「通过/已拦截」≠失败**（判定见 references/playwright-strategy.md 的「组件库防误读与多信号判定」）。
+8. **结束闸门**：**测试环境保留造数为预期**，仅当确需清理时才清理并留痕；须记录本轮产生数据（单据编号/扣减量）并在报告/缺陷清单注明。`record_baseline/assert_new_target` 仅用于防误动历史数据。证据截图归档到 `bug-reports/<功能>/`，缺陷清单「证据」只写纯文件名；用 `ones_submit_defects.py` 提缺陷，缺主工单 URL 先问用户、**不许跳过**；报告/缺陷/用例归档到 `knowledge-base/` 对应目录。
 
 ## 边界：何时不使用本技能
 
@@ -43,11 +43,11 @@ description: >-
 ## 开工前准备（定式）
 
 1. 确认环境性质（生产/测试/预发布）与测试账号角色权限，记录到报告头。
-2. 拿到 URL、需求文档路径、测试数据范围；需求缺失先向用户要。
+2. 拿到 URL、需求文档路径、测试数据范围；需求缺失先向用户要。**执行前做数据勘察**：列出每条用例前置条件所需数据是否现成，不足标「数据受限未覆盖」或请求造数；**需求未明确项前置确认**：把「报错文案/停留含义/记忆口径/校验提示」等未明确项先抛给用户/产品确认，避免测完攒一堆待确认。
 3. **沙箱网络受限时（DNS 解析失败 / Operation not permitted），访问目标站点的浏览器/网络命令统一用非沙箱（require_escalated）执行，不要在沙箱内先试一遍再升级。**
 4. **浏览器定式**：被测 MES 站点统一用独立 Chromium + Keycloak 登录（`bbt_osd_common.login_ousida`）；ONES 常驻 Edge（CDP 9334）只用于 ONES 相关操作，不混用。
-5. **登录/导航零重复**：新页面直接用 `scripts/recon-generic/recon_page.py --url <URL>`（内置登录+导航+侦察），不要每个脚本重写；页面结构固化到 references 后直接引用。
-6. 明确清理策略：本轮数据统一命名带测试标识，测完删除；清理失败写入报告。
+5. **登录/导航零重复**：新页面直接用 `scripts/recon-generic/recon_page.py --url <URL>`（内置登录+导航+侦察），不要每个脚本重写；页面结构固化到 references 后直接引用。**判定走多信号**：操作结果用 `bbt_helpers.judge_action` / `api_wait.confirm_action`（toast+内联错误+新接口+数据变化四源交叉），不只看单层信号。
+6. 数据策略遵循必守 #8：测试环境保留造数（命名带测试标识便于追溯），仅在确需清理时清理并留痕；记录本轮产生数据。
 
 ## 快速分层
 
@@ -87,11 +87,11 @@ description: >-
 4. 跑一条端到端主链路，例如：新增主表 → 新增子表 → 审核 → 明细/导出可见 → 取消审核 → 删除清理。
 5. 对每个必填、数值、日期、状态按钮只抽取最高风险用例验证，不做全排列。
 6. 失败时截图和记录步骤；通过项只记录结果，不重复截图。所有用例默认挂错误监听（console / HTTP≥400 / 页面提示），有错必报，防止"假通过"。
-7. 测试结束前清理本轮数据；清理失败必须写入报告。
+7. 测试结束的数据处理遵循必守 #8：保留造数为主，确需清理时才清理并留痕，并记录本轮产生数据。
 
-**数据基线（防误动已有数据）**：测试开始前先用 `bbt_helpers.record_baseline()`
-记录当前表格行标识（如单号），之后任何新增/编辑/删除目标先 `assert_new_target()` 核对，
-只操作基线外数据；清理时也只删基线外数据。
+**数据基线（防误动已有数据）**：测试开始前用 `bbt_helpers.record_baseline()`
+记录当前表格行标识（如单号），新增/编辑/删除目标先 `assert_new_target()` 核对，只操作基线外数据。
+（是否清理遵循必守 #8：测试环境保留造数，仅在确需清理时才删基线外数据。）
 
 ## IPC 单机/产线界面与交接班
 
@@ -149,7 +149,7 @@ description: >-
 
 ## Playwright 使用策略
 
-先读 `references/playwright-strategy.md`。核心约定：
+先读 `references/playwright-strategy.md`。核心约定（含 2026-09-03 新增的「组件库防误读与多信号判定」「级联/树选择（侦测先行）」两节，**详细规则只在该 reference，SKILL 不复述**）：
 
 - 复用已有页面，不重复多开。
 - 优先条件等待，不用长时间固定 sleep。
@@ -166,7 +166,9 @@ description: >-
 - **失败分级（防无限重试）**：环境失败（接口 502/超时/网络错误）→ 标记环境观察，立即跳过，不重试；业务失败（页面明确报错提示）→ 才算失败，重试最多 1 次。
 - **侦察→固化→引用纪律**：同一页面结构侦察最多 2 次；遇到新交互方式（如自定义弹窗/刷卡层）先补进 references 再继续，禁止反复 dump 同一页面。
 - **失败降级路径**：UI 操作连续失败达到重试上限后，改用**接口只读核验**数据状态（页面/接口一致性）确认结果，不再盲目重试；确认环境问题（代理/服务端异常）立即记录环境观察并跳过。
-- **操作成功判定**：以数据状态变化为准（如页签卡片集合、接口 inUse/状态字段），toast 仅作辅助，不作为唯一判定依据。
+- **接口核验替代（页面不渲染时）**：列表/明细页在自动化下不渲染（SPA/需菜单上下文/惰性加载）时，改用**接口只读核对**确认数据（如例中的 `ingredient/bom-preview` 已含全字段），并说明 UI 与接口差异，不硬读页面、不反复点。
+- **操作成功判定**：以数据状态变化为准（如页签卡片集合、接口 inUse/状态字段），toast 仅作辅助，不作为唯一判定依据。用 `bbt_helpers.judge_action` 综合「新接口+toast+内联错误+数据变化」四源，`processed=False` 且 reason=silent 才视为无反馈。
+- **失败隔离（用例间独立）**：每条用例 try/except 独立 + 前置 `bbt_helpers.reset_to(page, <URL>, 页签)` 回到已知态（含清勾选/关弹窗），避免单条失败中断整段或脏状态传染。
 - **证据统一归档**：测试结束把关键截图复制到 `bug-reports/功能名/` 目录，缺陷清单「证据」行只写纯文件名（不带分号/说明），便于提缺陷脚本解析。
 - **报告/缺陷清单自动生成**：执行脚本用 `scripts/report_gen.py` 从用例结果直接生成报告/缺陷清单骨架，AI 只补分析与定级；测试改数据后用 `scripts/data_cleanup.py` 对比基线并留痕（已恢复/未恢复）。
 
@@ -187,6 +189,7 @@ description: >-
   - `table_columns()` / `read_table_rows()`：按列头读表格；
   - `snap(page, name, out_dir, feature)`：语义化截图命名；
   - `record_baseline()` / `assert_new_target()`：数据基线记录与核对。
+  - **防误报/隔离（2026-09-03 新增）**：`read_feedback(page)`（toast+内联错误+可见dialog）、`active_dialog/read_dialog`（作用域读弹窗）、`judge_action(page,action,...)`（多信号判定，`processed=False` 且 reason=silent 才视为无反馈）、`detect_cascade/select_cascade`（**先侦测两级父→子、匹配才走**级联）、`click_or_observe`（先判 disabled，禁用作状态观察）、`reset_to(page,url,页签)`（用例隔离回已知态）。详细用法见 references/playwright-strategy.md。
 - `scripts/api_wait.py`：接口观测等待（核心等待方式，替代固定 sleep）。
   - `ApiWatcher(page)`：挂 response 监听（覆盖所有 frame）；
   - `snapshot()`：操作前取响应基线；`wait_new(base, keyword=None, timeout=15)`：等基线之后出现新响应（可用 URL 关键词缩小范围）；
@@ -196,7 +199,7 @@ description: >-
   - `launch_session(headless, cdp_port)`：启动新 Chromium（可暴露 CDP 端口）；`connect_session(cdp_url, url_contains)`：连接常驻浏览器并复用已有页面；
   - `close_session(...)`：收尾清理标签页；约定一个会话一个持有者。
 - `scripts/report_gen.py`：报告/缺陷清单骨架生成（`gen_report` / `gen_bug`），执行脚本直接喂结果生成 markdown，AI 只补分析。
-- `scripts/data_cleanup.py`：数据基线对比与清理留痕（`compare_state` / `write_cleanup_note`），测试后必须对比并记录已恢复/未恢复。
+- `scripts/data_cleanup.py`：数据基线对比与清理留痕（`compare_state` / `write_cleanup_note`）。**按需使用**：测试环境保留造数为主，仅在确需清理时对比基线并记录已保留/已恢复（遵循必守 #8）。
 - `scripts/ipc_helpers.py`：IPC 单机/产线界面导航辅助。
   - `unlock_ipc(page, system_password, base_url)`：进入 `/ipc/setting` 并解锁；
   - `select_station_and_save(page, station)`：精确选站并保存配置；

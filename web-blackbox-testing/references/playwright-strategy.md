@@ -1,11 +1,53 @@
 # Playwright 使用策略
 
+> 本文件定位（去重原则，2026-09-03）：本 reference 是「机制/实现细节」的**唯一权威**；判定与底线类原则一律在 SKILL.md 的「必守清单」，本文件不复述，只给怎么用 / 场景钩子 / 示例。新增规则（组件库防误读、级联侦测先行）唯一权威即本文件，SKILL 仅一行指针，避免两处全文复述。
+
+## 组件库防误读与多信号判定（2026-09-03 增补）
+
+踩坑：必填校验提示常以顶部 toast（.el-message）弹出而非表单内联错误；只读 .el-form-item__error 会把「校验已生效」误判为「静默无提示」（生成方式必填拦截误报）。级联类交互同理，「父节点只展开、叶节点才选中」，只点父节点会误判「无法回填」。
+
+读全信号层：优先用 bbt_helpers.read_feedback(page)（toast + 内联错误 + 可见 dialog 一起读），或用 api_wait.confirm_action（返回已含 toasts 与 form_errors）。信号源四类：
+
+1. 新业务接口响应（ApiWatcher.wait_new / judge_action 的 new_responses）
+2. 顶部 toast（.el-message / .el-notification / .el-message-box）
+3. 表单内联校验错误（.el-form-item__error）
+4. 数据状态变化（操作前后 data_diff）
+
+判定标准（防误报核心）：
+
+| 场景 | 判定 |
+| --- | --- |
+| 有新响应 且 无校验类提示 | processed=True, ok=True, reason=success |
+| 有校验类提示（toast/内联，如「必须/请选择/大于0/不超过」） | processed=True, ok=False, reason=blocked——记「已处理·被拦截」，不是失败 |
+| 无新响应、无任何提示、数据未变 | processed=False, reason=silent——才需人工核（真·无反馈） |
+| 有 HTTP>＝400 新响应 | ok=False, reason=http_error |
+
+用 bbt_helpers.judge_action(page, action, api_watcher=None, data_diff=None) 拿到这四个信号；api_wait.confirm_action 同样返回 reason/processed。不要把「有提示的拦截」写成缺陷。
+
+点击前先判禁用：用 bbt_helpers.click_or_observe(page, 按钮文本)——按钮 disabled 时返回 (disabled, ...) 记状态观察，避免对 disabled 按钮 click 超时中断整段（勾选态被清、按钮回落 disabled 的场景）。
+
+## 级联与树选择（侦测先行）（2026-09-03 增补）
+
+el-cascader 两级结构（如 来源地：事业部 → 车间）需要「先展开父节点 → 点叶节点」两步；且必须在知道结构确为两级父→子时才走这一步，否则跳过。用 bbt_helpers.detect_cascade(page, trigger_sel) 先侦测：
+
+- 示例：diag = detect_cascade(page, "input[placeholder*='来源地'] 或其他触发选择器")
+- diag 结构：{kind:'el-cascader-2level'|'single-list'|'unknown', hasParentChild:bool, parents:[...], leaves:[...]}
+- 若 diag.get("hasParentChild") 为真：ok, val = select_cascade(page, trigger_sel, leaf_part="车间1", diag=diag)；返回 (ok, value) 已回填 / (fail, reason)
+- 若为假（非两级级联 / 不是级联）：跳过，不盲点（记结构观察或待人工）
+
+要点：
+
+- select_cascade 内部会先调 detect_cascade（或复用传入 diag），hasParentChild=False 时返回 (skip, reason) 不执行任何点击。
+- 选择成功后必须断言输入框回填非空（(ok, value)），否则记 fail（回填空 = 需人工复核）。
+- 若页面下拉不是 el-cascader 两级而是一次性列表/其它组件，直接走「标准用户操作」，不要套用级联步骤。
+
+
 ## 执行环境与沙箱（网络受限）
 
 - 目标站点访问默认非沙箱：沙箱 DNS 受限（`Could not resolve host` / `Operation not permitted`）时，浏览器自动化与网络命令直接用 require_escalated，不先沙箱试错再升级。
 - 浏览器定式：被测 MES 站点统一用独立 Chromium + Keycloak 登录（`bbt_osd_common.login_ousida`）；ONES 常驻 Edge（CDP 9334）只用于 ONES 操作，不混用、不反复试启动方式。
 - 登录/导航零重复：新页面直接 `scripts/recon-generic/recon_page.py --url <URL>`（内置登录+导航+侦察）；页面结构固化到 references 后直接引用，不再逐个脚本重写。
-- 开工顺序：读需求 → 读 skill/reference → 起浏览器登录一次 → 侦察固化 → 跑用例 → 清理。
+- 开工顺序：读需求 → 读 skill/reference → 起浏览器登录一次 → 侦察固化 → 数据勘察 → 跑用例 → 记录产生数据（清理遵循必守 #8，测试环境保留造数为主）。
 
 1. 浏览器自动化统一用本机 Python Playwright 脚本（UTF-8，写成 `.py` 文件执行）
    或浏览器控制技能；先完成登录、菜单定位和页面结构侦察（`recon_page.py`），
@@ -42,9 +84,11 @@
 - 一般模式：一个功能 = 一个执行脚本，登录一次，按「筛选 → 新增 → 校验 → 编辑 → 复制 → 删除 → 导入 → 清理」的大致顺序跑完该功能用例。
 - **注意：这只是大致流程，不是固定配方。** 每个环境、每个功能的页面结构 / 数据 / 前置条件都可能不同，用例顺序和造数步骤要按实际侦察结果调整，不要机械照搬固定顺序。
 - 简单主数据默认合并同类校验（必填 / 长度 / 唯一性在同一个新增弹窗里一次验完），不拆成过多独立用例。
-- 脚本内一次登录跑完并自动清理测试数据；执行结束产出报告 / 缺陷清单。
+- 脚本内一次登录跑完；执行结束产出报告 / 缺陷清单。数据处理遵循必守 #8：保留造数为主，确需清理时才清理并留痕。
 
 ## 接口观测等待（核心约定，2026-08-21 增补）
+
+> 原则见 SKILL「Playwright 使用策略」与参照 api_wait；本段给四步实现与判定细节。
 
 页面数据 = 接口返回后渲染。**不要在操作后固定 sleep 或立即读 DOM 下结论**，
 要观测页面实际发出的接口，等"操作触发的业务接口返回"后再断言页面数据。
@@ -78,11 +122,15 @@ assert_page_state(...)
 
 ## 失败分级（2026-08-21 增补）
 
+> 底线见 SKILL 必守 #7 与「失败分级」；本段给分层判定细节。**补充：校验被拦截（有提示）≠失败，是已处理·业务拦截**（见上文「组件库防误读与多信号判定」）。
+
 - **环境失败**：接口 502 / 超时 / 网络错误 / 页面空白 → 标记「环境观察」，立即跳过该步骤，**不重试**（重试只会放大无效消耗）。
 - **业务失败**：页面出现明确报错提示（如「切换成功」未出现、按钮无响应且无新接口）→ 才算失败，重试最多 1 次；仍失败按缺陷记录。
 - 判定依据优先用 `api_wait.confirm_action` 的返回（新接口 + 错误 + toast），不靠肉眼猜。
 
 ## 一次会话与页面持有（2026-08-21 增补）
+
+> 原则见 SKILL 必守 #5；本段给会话/页面持有机制。
 
 - 一个测试任务 = 一个长脚本 + 一个浏览器会话：启动（`session_helpers.launch_session`）→ 登录/导航一次 → 跑完全部用例 → `close_session` 清理。
 - 一个会话**只有一个持有者**操作页面；若用 CDP 常驻，启动脚本打开页面后让出，操作脚本只连接不并发操作同一页面（多 playwright 客户端并发会导致事件/状态错乱）。
@@ -90,10 +138,14 @@ assert_page_state(...)
 
 ## 侦察→固化→引用纪律（2026-08-21 增补）
 
+> 底线见 SKILL 必守 #4；本段给执行要求。
+
 - 同一页面结构侦察最多 2 次；第 2 次前必须把稳定交互方式（选择器、事件、遮挡处理）写进 references。
 - 遇到新交互（自定义弹窗、刷卡层、iframe 多实例）→ 立即补 references 再继续，禁止反复 dump 同一页面。
 
 ## 报告与数据留痕（2026-08-21 增补）
 
+> 数据处理遵循 SKILL 必守 #8（测试环境保留造数，按需清理）；本段给报告/清理留痕做法。
+
 - 用例执行结果直接喂 `report_gen.gen_report / gen_bug` 生成报告/缺陷清单骨架，避免手工整理消耗 token。
-- 测试改数据后，用 `data_cleanup.compare_state` 对比基线，`write_cleanup_note` 留痕「已恢复 / 未恢复」，防止污染后续回归。
+- 测试改数据后，记录本轮产生数据（单据编号 / 扣减量）；确需清理时用 `data_cleanup.compare_state` 对比基线并 `write_cleanup_note` 留痕「已保留 / 已恢复」。测试环境保留造数为主，不作强制清理。

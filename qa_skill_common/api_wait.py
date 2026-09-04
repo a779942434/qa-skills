@@ -21,6 +21,19 @@
 """
 import time
 __all__ = ["ApiWatcher", "wait_any_api"]
+_VALIDATION_HINTS = (
+    "必须", "不能", "至少", "不大于", "请选择", "请填写", "不能为", "不允许",
+    "超出", "超过", "最少", "最多", "请输入", "不能小于", "必填", "大于0",
+)
+_SUCCESS_HINTS = ("成功", "已保存", "已完成", "已生成", "提交成功")
+
+
+def _is_validation(text):
+    return any(k in (text or "") for k in _VALIDATION_HINTS)
+
+
+def _is_success(text):
+    return any(k in (text or "") for k in _SUCCESS_HINTS)
 
 
 
@@ -97,26 +110,30 @@ if __name__ == "__main__":
 
 
 def confirm_action(page, action, watcher=None, keyword=None, timeout=15.0,
-                   toast_selector=".el-message, .el-notification, .el-message-box"):
-    """统一操作判定：执行操作 → 等新业务接口返回 → 收集错误与页面提示。
+                   toast_selector=".el-message, .el-notification, .el-message-box",
+                   form_error_selector=".el-form-item__error"):
+    """统一操作判定：执行操作 → 等新业务接口返回 → 收集错误/页面提示/内联校验错误。
 
-    解决"操作后盲目 sleep / 提前读 DOM"的问题：
-    - 无新响应 = 操作未生效（按钮没点中/请求被拦截），按失败处理，不硬读页面；
-    - 有 HTTP>=400 新响应 = 接口失败，结果带原因。
+    解决"操作后盲目 sleep / 提前读 DOM"与"校验拦截被误判为失败"的问题（2026-09-03 修正）：
+    - "校验被拦截且有提示（toast/内联错误）"是**已处理（业务拦截）**，不是"无响应失败"；
+    - 仅当"既无新响应、又无任何提示、数据又未变"（processed=False）才需人工核，
+      避免把"必填校验已生效"误当"静默无提示"（如生成方式必填拦截）。
 
     用法：
         w = ApiWatcher(page)
-        base = w.snapshot()                       # 操作前基线（可省略，函数内会自动取）
         result = confirm_action(page, lambda: click_action(...))
         if not result["ok"]:
-            # result["errors"] 可直接进缺陷清单；不继续断言页面
+            # errors / form_errors 可直接进缺陷清单；processed 区分"被拦截"与"无响应"
         # ok 后再读 DOM 断言
 
     返回 dict：
-        ok            操作是否生效（等到新接口且无 HTTP>=400 新响应）
+        ok            操作成功（有新接口且无 HTTP>=400 新响应，且无"校验拦截"类提示）
+        processed     操作是否被处理（有新业务响应 或 有 toast/内联校验提示）
+        reason        "success" | "changed" | "blocked" | "silent" | "http_error"
         new_responses 操作后新响应列表
-        errors        操作期间错误（HTTP>=400 响应 + 页面提示 toast）
+        errors        操作期间错误（HTTP>=400 新响应）
         toasts        操作后页面可见提示文本
+        form_errors   操作后页面表单内联校验错误文本
     """
     if watcher is None:
         watcher = ApiWatcher(page)
@@ -153,9 +170,42 @@ def confirm_action(page, action, watcher=None, keyword=None, timeout=15.0,
     except Exception:
         pass
 
+    form_errors = []
+    try:
+        for m in page.locator(form_error_selector).all():
+            try:
+                if m.is_visible():
+                    t = (m.inner_text() or "").strip()
+                    if t and t not in form_errors:
+                        form_errors.append(t[:200])
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     err_http_new = [(s, u) for s, u in err_http if u not in set(r["url"] for r in base)]
-    ok = bool(new) and not err_http_new
-    return {"ok": ok, "new_responses": new, "errors": err_http_new, "toasts": toasts}
+    has_new_resp = bool(new)
+    has_feedback = bool(toasts or form_errors)          # toast + 内联错误任一存在即视为"有反馈"
+    has_validation = any(_is_validation(t) for t in (toasts + form_errors))
+    has_success = any(_is_success(t) for t in toasts)
+    processed = has_new_resp or has_feedback            # 已处理 = 有新响应 或 有提示
+
+    if err_http_new:
+        ok, reason = False, "http_error"
+    elif has_validation:
+        ok, reason = False, "blocked"                   # 校验拦截：已处理，但未成功
+    elif has_success:
+        ok, reason = True, "success"
+    elif has_new_resp:
+        ok, reason = True, "success"
+    elif has_feedback:
+        ok, reason = False, "blocked"
+    else:
+        ok, reason = False, "silent"                    # 无任何信号，需人工核
+
+    return {"ok": ok, "processed": processed, "reason": reason,
+            "new_responses": new, "errors": err_http_new,
+            "toasts": toasts, "form_errors": form_errors}
 
 
 __all__ = ["ApiWatcher", "wait_any_api", "confirm_action"]
