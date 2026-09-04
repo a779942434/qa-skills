@@ -149,3 +149,36 @@ assert_page_state(...)
 
 - 用例执行结果直接喂 `report_gen.gen_report / gen_bug` 生成报告/缺陷清单骨架，避免手工整理消耗 token。
 - 测试改数据后，记录本轮产生数据（单据编号 / 扣减量）；确需清理时用 `data_cleanup.compare_state` 对比基线并 `write_cleanup_note` 留痕「已保留 / 已恢复」。测试环境保留造数为主，不作强制清理。
+
+## Playwright MCP 真窗口模式（Chrome 扩展，2026-09-04 增补）
+
+> 定位：与「Python Playwright 脚本」并列的第二种连接方式，只解决「复用真窗口已登录态」这一场景；
+> 判定/纪律类原则仍以 SKILL.md 必守清单为准，此处只写安装、配置与使用钩子。
+
+适用场景：被测系统在**日常 Chrome 默认 profile 里已登录**（如 t-dafu / t-ousida），希望 AI 直接操控真实窗口、
+复用登录态做黑盒，最贴近真实用户操作。
+
+- 本体：微软官方 `@playwright/mcp`，Codex 侧配置已写入 `~/.codex/config.toml`：
+
+  ```toml
+  [mcp_servers.playwright]
+  type = "stdio"
+  command = "npx"
+  args = ["-y", "@playwright/mcp@latest", "--extension"]
+  ```
+
+- 扩展：Chrome Web Store 装 **Playwright MCP Bridge**
+  `https://chromewebstore.google.com/detail/playwright-mcp-bridge/mmlmfjhmonkocbjadbfplnigmagldckm`
+  （装在哪个 Chrome profile，就能连那个 profile 里已登录的标签页）。
+- 免弹窗：点扩展图标打开状态页 → 复制 `PLAYWRIGHT_MCP_EXTENSION_TOKEN` → 写入 config 同节 env：
+
+  ```toml
+  [mcp_servers.playwright.env]
+  PLAYWRIGHT_MCP_EXTENSION_TOKEN = "<用户提供的 token>"
+  ```
+
+  Token 随 profile 走；不配置则每次连接需在扩展弹窗点 approve。
+- 生效条件：改完 config 需**重启 Codex**（新 MCP server 才会加载）；扩展未装时 `--extension` 启动后工具不可用。
+- 使用纪律：与 Python Playwright 一致——一次会话一个持有者、复用标签页、不混用 ONES 常驻 Edge；
+  首个标签页由用户在扩展弹窗里选定（选被测页签），随后按必守清单走标准用户操作，禁止 JS 强制改值/绕过 UI。
+- 与脚本的关系：MCP 真窗口适合「探索/人工登录态复用」，批量回归仍可走 Python 长脚本；两者择一，不双写同一用例。

@@ -171,6 +171,7 @@ description: >-
 - **失败隔离（用例间独立）**：每条用例 try/except 独立 + 前置 `bbt_helpers.reset_to(page, <URL>, 页签)` 回到已知态（含清勾选/关弹窗），避免单条失败中断整段或脏状态传染。
 - **证据统一归档**：测试结束把关键截图复制到 `bug-reports/功能名/` 目录，缺陷清单「证据」行只写纯文件名（不带分号/说明），便于提缺陷脚本解析。
 - **报告/缺陷清单自动生成**：执行脚本用 `scripts/report_gen.py` 从用例结果直接生成报告/缺陷清单骨架，AI 只补分析与定级；测试改数据后用 `scripts/data_cleanup.py` 对比基线并留痕（已恢复/未恢复）。
+- **真窗口/复用登录态（2026-09-04 新增）**：需要操控**日常 Chrome 已登录的真实窗口**时，用 Playwright MCP 扩展模式（`~/.codex/config.toml` 已配 `[mcp_servers.playwright]` `--extension`；装 Playwright MCP Bridge 扩展 + 重启 Codex 后生效）；安装/Token/纪律见 `references/playwright-strategy.md`「Playwright MCP 真窗口模式」。
 
 ## 测试工具箱（scripts/）
 
