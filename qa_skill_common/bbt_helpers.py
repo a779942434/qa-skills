@@ -24,6 +24,8 @@ __all__ = [
     # 2026-09-03 防误报 + 级联确定性 + 隔离新增
     "read_feedback", "active_dialog", "read_dialog", "judge_action",
     "detect_cascade", "select_cascade", "click_or_observe", "reset_to",
+    # 2026-09-07 无视觉/盲操作辅助
+    "click_visible_text", "open_split_add_dropdown", "dump_visible_dialogs",
 ]
 
 
@@ -683,6 +685,82 @@ def reset_to(page, url, tab_text=None, wait_ms=6000):
             pass
     return True
 
+# ---------- 无视觉/盲操作辅助（2026-09-07 增补，来源：设备-人员权限表实测固化） ----------
+
+def click_visible_text(page, text):
+    """点击页面【可见】的精确文本元素（JS 直点，自动向上找可点容器）。
+
+    背景：盲操作（无截图视觉）时，Playwright `text=` 常命中隐藏弹窗标题（如
+    el-dialog__title「新增/编辑/日志」）导致点击超时。本函数只取 offsetParent
+    非空的可见叶子，再向上找 button/a/btn/item/option/title/tab/cell 容器点击。
+
+    返回 dict：{"ok": True, "on": "<tag>.<class>"} 或 {"ok": False, "why": "..."}
+    """
+    try:
+        res = page.evaluate("""(txt) => {
+          const all=[...document.querySelectorAll('*')].filter(e=>e.offsetParent!==null
+            && (e.innerText||'').trim()===txt && (e.textContent||'').trim().length<=60);
+          if(!all.length) return {ok:false, why:'none-visible'};
+          const e=all[all.length-1]; let n=e;
+          for(let i=0;i<7&&n;i++){const c=(n.className||'').toString();
+            if(n.tagName==='BUTTON'||n.tagName==='A'||/btn|item|option|title|tab|cell/.test(c)) break;
+            n=n.parentElement;}
+          (n||e).click();
+          return {ok:true, on:(n||e).tagName+'.'+((n||e).className||'').toString().slice(0,60)};
+        }""", text)
+        return res
+    except Exception as e:
+        return {"ok": False, "why": repr(e)[:120]}
+
+
+def open_split_add_dropdown(page, entry_selector=".add-dropdown-btns-entry"):
+    """展开「新增▾」式分体按钮的下拉并点击首项（如子表「导入 Excel」入口）。
+
+    适用组件结构（sy 表格子表工具栏）：
+      .add-dropdown-btns-entry > .single-add-btn(新增) + 箭头(el-icon-arrow-down)
+        -> .el-popover.add-popover > .add-popover__item(导入 Excel)
+    必须先真实 hover（Vue el-popover 对 mouseenter 敏感），JS 直接 click 往往不触发。
+
+    返回 bool（是否成功点开下拉首项）。
+    """
+    try:
+        entry = page.locator(entry_selector).first
+        if entry.count() == 0:
+            return False
+        bx = entry.bounding_box()
+        if not bx:
+            return False
+        page.mouse.move(bx["x"] + bx["width"] / 2, bx["y"] + bx["height"] / 2)
+        page.wait_for_timeout(800)
+        page.mouse.click(bx["x"] + bx["width"] - 8, bx["y"] + bx["height"] / 2)
+        page.wait_for_timeout(1000)
+        ok = page.evaluate(
+            """() => { const els=[...document.querySelectorAll('.add-popover__item')]
+              .filter(e=>e.offsetParent!==null);
+              if(!els.length) return false; els[0].click(); return true; }"""
+        )
+        page.wait_for_timeout(2500)
+        return bool(ok)
+    except Exception:
+        return False
+
+
+def dump_visible_dialogs(page, max_len=1800):
+    """读取当前所有【可见】弹窗(.sy-dialog/.el-dialog)文本，替代整页 innerText 大海捞针。
+
+    返回 list[str]，每个弹窗文本截断到 max_len；配合 close_dialog/重置做收尾。
+    """
+    try:
+        return page.evaluate(
+            """(maxLen) => [...document.querySelectorAll('.sy-dialog,.el-dialog')]
+              .filter(x=>x.offsetParent!==null)
+              .map(x=>(x.innerText||'').trim().slice(0,maxLen))""",
+            max_len,
+        )
+    except Exception:
+        return []
+
+
 
 if __name__ == "__main__":
     print("bbt_helpers 可用函数:")
@@ -692,3 +770,4 @@ if __name__ == "__main__":
     print("  find_page / parse_import_template / recon_page_structure / recon_once")
     print("  防误报&隔离: read_feedback / active_dialog / read_dialog / judge_action")
     print("  级联&禁用: detect_cascade / select_cascade / click_or_observe / reset_to")
+    print("  无视觉/盲操作(2026-09-07): click_visible_text / open_split_add_dropdown / dump_visible_dialogs")

@@ -119,6 +119,21 @@ assert_page_state(...)
 - IPC 弹窗/页签切换场景强烈建议使用：切页签 → 等新列表接口 → 再读卡片；打开弹窗 → 等新查询接口 → 再 dump 结构；刷卡提交 → 等提交接口 → 再断言 toast/状态。
 - 接口等待代替固定 sleep 后，页签切换等待可从 8~10s 降到 1~3s；失败判定也更准（无新响应=操作未生效，而不是"页面没刷新"）。
 
+## 等待优先级与无视觉断言（2026-09-07 增补）
+
+> 原则见 SKILL「执行形态与等待基线」；本段给判定顺序与无视觉场景的具体做法。
+
+- 等待优先级：**接口/响应基线等待 > 条件等待 > 固定 sleep（兜底）**。
+  1. `api_wait.ApiWatcher`：操作前 `snapshot()`，操作后 `wait_new(base)` 等业务接口返回；
+  2. 无接口可观测时用 `wait_visible / wait_text / wait_button / wait_until`；
+  3. 固定 `wait_for_timeout` 只用于接口返回后的渲染余量（≤500ms）、首次侦察、无信号兜底。
+  一次会话内共用监听器，不重复挂载；同一用例不既用接口等待又叠一堆 sleep。
+- 无视觉（后台无头）模式：截图仅作证据归档，判定一律走可见 DOM/文本/接口信号；
+  - 点击用 `bbt_helpers.click_visible_text`（只取 offsetParent 非空元素，避免命中隐藏 el-dialog__title 等）；
+  - 分体按钮（新增▾）用 `bbt_helpers.open_split_add_dropdown`（真实 hover 才能触发 el-popover）；
+  - 弹窗内容用 `bbt_helpers.dump_visible_dialogs` 按作用域读取，不再整页 innerText 大海捞针；
+  - 关键交互（弹窗 0 条、异常 toast、下拉项）仍截图，供用户/人工抽核防误报。
+
 
 ## 失败分级（2026-08-21 增补）
 

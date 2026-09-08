@@ -10,6 +10,18 @@ description: >-
 ---
 
 # Web 黑盒测试
+## 开工速查（2026-09-07 增补，先读这一节再往下，防重复踩坑）
+
+> 这些规则对应历史上反复出现的耗时/误报点，均已固化到下文对应章节与 qa_skill_common：
+1. **新站点先按 A1 适配，不套旧站点选择器/登录**：先跑组件指纹（el-*/sy-*/div-table/iframe），
+   登录形态不同（非 Keycloak）先侦察再改；入口用全局搜索按功能名直达（见「新站点适配侦察定式」）。
+2. **盲点按钮/隐藏弹窗标题是高频误点源**：点击一律用 `bbt_helpers.click_visible_text`；
+   「新增▾」类下拉用 `open_split_add_dropdown`；读弹窗用 `dump_visible_dialogs`（A4，已进 qa_skill_common）。
+3. **执行形态（B5）**：一个任务 = 一个后台会话 + 一次登录 + 一个总入口脚本串行跑完，
+   总入口模板见 `scripts/run_all_template.py`；一次提权批准总入口，不再逐脚本审批/逐脚本登录。
+4. **等待基线（B6）**：接口/响应基线等待 > 条件等待 > 固定 sleep（仅 ≤500ms 渲染余量/首次侦察兜底）。
+5. **无视觉模式**：截图仅证据，判定只看可见 DOM/文本/接口信号，关键交互截图供人工抽核。
+
 
 目标：在授权测试环境中，用最少步骤验证最大业务风险，并把结论用中文留档。默认优先快测，不追求一次覆盖所有细枝末节。
 
@@ -25,6 +37,23 @@ description: >-
 6. **只做标准用户操作**（点击/键入/下拉选择）。**禁止** JS 注入改值、改 DOM/属性绕过校验、对 disabled 输入框强填、改遮挡元素层级；标准操作不可行时记录为「待确认/缺陷/环境观察」，**不许硬绕**。
 7. **失败分级**：接口 5xx/超时/网络错 = 环境观察，跳过不重试；页面明确报错 = 业务失败，重试 ≤1 次仍失败截图进缺陷清单；操作成功以数据状态变化为准，toast 仅辅助。**校验被拦截（有 toast/内联错误提示）= 已处理业务拦截，记「通过/已拦截」≠失败**（判定见 references/playwright-strategy.md 的「组件库防误读与多信号判定」）。
 8. **结束闸门**：**测试环境保留造数为预期**，仅当确需清理时才清理并留痕；须记录本轮产生数据（单据编号/扣减量）并在报告/缺陷清单注明。`record_baseline/assert_new_target` 仅用于防误动历史数据。证据截图归档到 `bug-reports/<功能>/`，缺陷清单「证据」只写纯文件名；用 `ones_submit_defects.py` 提缺陷，缺主工单 URL 先问用户、**不许跳过**；报告/缺陷/用例归档到 `knowledge-base/` 对应目录。
+## 新站点适配侦察定式（2026-09-07 增补）
+
+> 适用：目标站点/组件库与固化站点（t-ousida 等 Element UI）不同（如自研 sy-*/div-table 组件、
+> 登录非 Keycloak、内容在 iframe/弹层）。此时固定选择器（.el-table__row 等）与固化登录不适用，
+> 按下面定式一次摸清，避免“侦察→试操作→失败→再侦察”循环：
+
+1. **先做组件指纹探针（只读）**：dump 页面高频 class 前缀（el-* / sy-* / div-table / vxe / ag-）与 iframe 数，
+   判断是否与固化组件同源；不同即停用旧选择器，不自作假设套用。
+2. **入口用“全局搜索按功能名直达”**：优先用站点首页搜索框逐字输入功能名（部分搜索框对 fill 不触发过滤，
+   需 click→清空→逐字 type→点下拉项），得到「模块>分类>功能名」路径与直达 URL 后记录，不走菜单逐级点击。
+3. **一次会话内完成侦察并固化**：登录一次 → 组件指纹 + 入口 + TAB/主子表/弹窗结构（按钮/表头/弹窗祖先链）写入
+   references/<站点>-<功能>.md，之后所有用例脚本直接引用；结构侦察在同一会话内进行，页面不再重复 dump。
+4. **适配期例外**：全新组件库的首次适配允许侦察 >2 次，但每次必须把发现写进该页面 reference 并在下一次直接引用，
+   禁止反复打印整页文本/全部按钮；适配完成后按原「侦察≤2次」纪律执行。
+5. **交互组件先探后点**：弹窗/下拉/分体按钮（如「新增▾」）先读祖先链判断触发方式（click vs hover），
+   再决定用 Playwright 或 JS 可见点击（见 bbt_helpers 无视觉辅助），不盲点隐藏元素。
+
 
 ## 边界：何时不使用本技能
 
@@ -48,6 +77,26 @@ description: >-
 4. **浏览器定式**：被测 MES 站点统一用独立 Chromium + Keycloak 登录（`bbt_osd_common.login_ousida`）；ONES 常驻 Edge（CDP 9334）只用于 ONES 相关操作，不混用。
 5. **登录/导航零重复**：新页面直接用 `scripts/recon-generic/recon_page.py --url <URL>`（内置登录+导航+侦察），不要每个脚本重写；页面结构固化到 references 后直接引用。**判定走多信号**：操作结果用 `bbt_helpers.judge_action` / `api_wait.confirm_action`（toast+内联错误+新接口+数据变化四源交叉），不只看单层信号。
 6. 数据策略遵循必守 #8：测试环境保留造数（命名带测试标识便于追溯），仅在确需清理时清理并留痕；记录本轮产生数据。
+## 执行形态与等待基线（2026-09-07 增补）
+
+> 目的：把“登录多次/固定 sleep 堆叠/每脚本单独提权审批”导致的耗时压下来。配套 helper 见
+> qa_skill_common（click_visible_text / open_split_add_dropdown / dump_visible_dialogs）与 scripts/api_wait.py。
+
+1. **一个任务 = 一个常驻后台会话 + 一个总入口脚本（B5）**：
+   - 后台无头 Chrome（系统 Chrome executable_path，禁止下载浏览器）或 CDP 常驻会话，登录一次；
+   - 用例按「侦察固化 → 数据勘察 → P0→P1→P2 → 记录产生数据」顺序在**同一个总入口脚本**内串行跑完，
+     不按用例拆 N 个脚本反复登录/反复起浏览器；
+   - 总入口脚本建议一次请求用户批准（prefix 规则如 `python3 <run_dir>/scripts/run_all.py`），
+     避免每个小脚本单独提权打断；脚本内用 try/except 隔离单用例失败，失败截图继续跑后续用例。
+2. **等待优先级（B6）：接口/响应基线等待 > 条件等待 > 固定 sleep（兜底）**：
+   - 优先 `api_wait.ApiWatcher`：操作前 `snapshot()`，操作后 `wait_new(base)` 等“操作触发的业务接口”返回再断言；
+   - 无接口可观测/拿不到响应时用 `wait_visible / wait_text / wait_button / wait_until` 条件等待；
+   - 固定 `wait_for_timeout` 仅用于：接口已返回后的少量渲染余量（≤500ms）、首次侦察、无任何信号的兜底；
+   - 一次会话内所有用例共用监听器，不重复挂载。
+3. **无视觉模式纪律（A4）**：后台无头看不到截图时，截图只作证据归档，**判定一律用可见 DOM/文本/接口信号**；
+   交互用 `click_visible_text`（避免点到隐藏弹窗标题）、分体按钮用 `open_split_add_dropdown`、读弹窗用
+   `dump_visible_dialogs`；关键交互仍截图供人工抽核（防自动化误报）。
+
 
 ## 快速分层
 
@@ -182,6 +231,9 @@ description: >-
   - `recon_dropdown.py --url <URL> --button 新增`：下拉可见选项；
   - `recon_subtables.py --url <URL>`：点击主表行 dump 子表。
 - `scripts/bbt_helpers.py`：
+  - **无视觉/盲操作辅助（2026-09-07 新增）**：`click_visible_text(page, text)`（JS 点可见精确文本，自动避开隐藏弹窗标题）、
+    `open_split_add_dropdown(page)`（真实 hover 展开「新增▾」类下拉并点首项，如子表「导入 Excel」）、
+    `dump_visible_dialogs(page)`（只读可见弹窗文本，替代整页 innerText）。
   - `find_page(ctx, url_contains, title_contains)` / `connect(cdp_url, url_contains=..., title_contains=...)`：连常驻浏览器并优先复用已有页面；
   - `attach_error_watchers(page)` / `collect_toasts()` / `error_report()`：console、HTTP≥400、页面提示三路错误监听；
   - `wait_visible` / `wait_text` / `wait_button` / `wait_toast(page, keyword)` / `wait_until`：条件等待（元素/文本/按钮/提示），替代固定 sleep；
@@ -197,6 +249,8 @@ description: >-
   - `confirm_action(page, action, keyword=None)`：统一操作判定（执行操作→等新接口→收集 HTTP≥400 与 toast→返回 ok/errors），失败原因可直接进缺陷清单；
   - 业务不同无需预知接口路径，靠基线对比动态识别；无新响应 = 操作未生效。
 - `scripts/session_helpers.py`：一次会话常驻浏览器助手。
+- `scripts/run_all_template.py`：**总入口长脚本模板（B5/B6）**——一个任务一个后台会话一次登录跑完全部用例；
+  复制改名为 run_all.py 后按任务改 CONFIG/CASES 即可，建议一次提权批准该总入口（prefix 如 `python3 <run>/run_all.py`）。
   - `launch_session(headless, cdp_port)`：启动新 Chromium（可暴露 CDP 端口）；`connect_session(cdp_url, url_contains)`：连接常驻浏览器并复用已有页面；
   - `close_session(...)`：收尾清理标签页；约定一个会话一个持有者。
 - `scripts/report_gen.py`：报告/缺陷清单骨架生成（`gen_report` / `gen_bug`），执行脚本直接喂结果生成 markdown，AI 只补分析。
