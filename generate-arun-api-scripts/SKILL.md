@@ -53,6 +53,23 @@ description: >-
 
 展开后输出紧凑步骤清单，走下面的「自动生成流程」交给 build_arun.py（controller / json2text / project 覆盖均支持），不逐条贴完整字段骨架。
 
+### 控制流自动识别（for / if）——用户描述到就自动加
+
+用户话术里出现下面这些意思时，不要把步骤平铺，直接包成 `controller` 步骤（嵌套也支持），
+不用等用户给控制器 JSON：
+
+- **for 循环**：`循环` / `逐个` / `每个都` / `依次` / `把……列表全部……` / `重复 N 次` / `直到处理完` / `未……的人逐个……`
+  → `{"controller": "for", "mode": "times", "times": "${<计数变量>}", "interval": "2", "steps": [...]}`。
+  循环次数/列表来自前一步 teardown 提取（`arun.set('<计数变量>', len(...))` 或存列表变量）。
+- **if 条件**：`如果` / `若` / `当……时` / `否则` / `为空则` / `不为空才` / `满足才执行` / `只有……才` / `存在才……`
+  → `{"controller": "if", "condition": "${a} == ${b}", "steps": [...], "elif_branches": [], "else_steps": [], "elseClose": true}`。
+  条件不满足直接跳过用 `"elseClose": true`；多分支用 `elif_branches` / `else_steps`。
+- **语法要点**：控制器字段（`times` / `condition` 等）用 ARun 平台 `${var}` 插值语法；
+  控制器内部接口步骤的 body 仍用 `$var`；两者共存，互不替代。
+- 命中模板名 `loop-items` / `if-switch` 时按 references/business-templates.md 展开骨架；
+  未命中模板名但话术命中上述触发词，同样手动包控制器，再交给 build_arun.py。
+
+
 ## 生成流程
 
 0. 优先识别业务流模板（`crud` / `crud+detail`）：命中则按 business-templates.md 展开步骤骨架，跳到步骤 3；未命中再走逐步解析。
