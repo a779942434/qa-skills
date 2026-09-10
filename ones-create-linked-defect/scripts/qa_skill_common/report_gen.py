@@ -57,35 +57,14 @@ def gen_report(meta: dict, cases: list, problems: list, uncovered: list,
 
 
 def gen_bug(meta: dict, bugs: list) -> str:
-    """生成缺陷清单骨架（与 ones-create-linked-defect 兼容）。
+    """生成缺陷清单骨架（契约单一来源：qa_skill_common.bug_report_schema）。
 
-    meta: {环境}
+    meta: {功能, 环境, 时间?}
     bugs: [{"编号","标题","严重程度","前置条件","操作步骤","预期结果","实际结果","复现率","证据","需求引用","备注"}]
     """
-    lines = [
-        f"# 缺陷清单：{meta.get('功能', '')}",
-        "",
-        f"- 测试时间：{meta.get('时间', DATE)}",
-        f"- 环境：{meta.get('环境', '')}",
-        "",
-    ]
-    for b in bugs:
-        lines += [
-            f"### {b.get('编号','BUG-XXX')}：{b.get('标题','')}",
-            "",
-            f"- 严重程度：{b.get('严重程度','待确认')}",
-            f"- 环境：{meta.get('环境', '')}",
-            f"- 前置条件：{b.get('前置条件','')}",
-            f"- 操作步骤：{b.get('操作步骤','')}",
-            f"- 预期结果：{b.get('预期结果','')}",
-            f"- 实际结果：{b.get('实际结果','')}",
-            f"- 复现率：{b.get('复现率','')}",
-            f"- 证据：{b.get('证据','')}",
-            f"- 需求引用：{b.get('需求引用','')}",
-            f"- 备注：{b.get('备注','')}",
-            "",
-        ]
-    return "\n".join(lines)
+    from .bug_report_schema import render as _render_bug
+
+    return _render_bug(meta, bugs)
 
 
 if __name__ == "__main__":

@@ -12,8 +12,12 @@ description: >-
 # Web 黑盒测试
 
 > 本技能自带公共实现（`scripts/qa_skill_common/`），**可独立安装**，无需同级 `qa_skill_common`；公共实现由仓库根 `vendor-common.sh` 统一生成。
+>
+> **按需加载**：只读本文件即可开工；仅当触发对应场景时再读 `references/<x>.md`（工具箱 / 测试范围 / Playwright 策略 / IPC / 导入导出 / 主数据 / 报告），不要一次全读。
 
 ## 首次使用（3 步）
+
+> **平台**：Windows / macOS / Linux 均可；浏览器统一用**本机系统 Chrome/Edge/Chromium**（自动探测，可用 `MES_BROWSER_PATH` 指定），**禁止下载浏览器**。
 
 1. **自检**：`python scripts/check_env.py` —— 有 FAIL 先按「修复指引」补齐（缺浏览器 / 缺依赖 / 站点不通都会明确指出）。
 2. **配环境**：按 [环境与前置配置总表](scripts/qa_skill_common/references/environment.md) 设置 `MES_URL` / `MES_ACCOUNT` / `MES_PASSWORD`（IPC、数据库、ONES 变量按需）。
@@ -39,43 +43,60 @@ description: >-
 
 目标：在授权测试环境中，用最少步骤验证最大业务风险，并把结论用中文留档。默认优先快测，不追求一次覆盖所有细枝末节。
 
-## 必守清单（执行前先对照；违反任一视为本轮执行失败）
+## 必守清单（分级：红线 / 默认做法 / 停顿边界）
 
-> 执行中每一步都对照下面底线，详细规则见本文后续各节与 `references/`。**不匹配即停、只做标准操作、侦察不重复** 三条是踩坑最多的底线。
+> 与前版「违反任一即失败」相比，这里分三档：只有 **A 红线**违反才算本轮执行失败；
+> **B 默认做法**可在合理范围内自行决定；**C 停顿边界**只在真正必要时才停下问用户。
 
-1. **环境勘察先行**：先确认本机浏览器（优先系统 Chrome/Edge，**禁止 `playwright install` / 下载浏览器**）、playwright 可用性、目标站点连通；目标站点与 skill 固化站点（如示例站点）不同时，先验证登录/SSO 是否互通，不自作假设。
-2. **只复用固化脚本**：登录/导航/下拉用 `qa_skill_common`（`login_for_page` / `login_ousida` / `goto`，环境无关，站点取 `MES_URL` 或 `--url`）；新页面侦察用 `recon-generic/recon_page.py --url <URL>`；造数用 `bbt_osd_setup.py`；提缺陷用 `ones_submit_defects.py --work-order <URL>`。**禁止自写平行替代脚本。**
-3. **不匹配即停**：固化工具与目标环境不匹配（域名/URL/登录/浏览器/组件结构不同）时，先停下用 ≤5 行说明「差异 + 最小适配方案（优先复用同一函数传参/环境变量）」，**等用户确认后再动手**，不得静默绕过。
-4. **侦察纪律**：同一页面侦察 ≤2 次，结果固化进 references 后直接引用；不重复 dump，不输出大段 DOM/表格/body 文本，日志只给结论/关键断言/截图文件名。
-5. **一次会话一个长脚本**：一次登录跑完本任务全部用例；不每个脚本重新登录/新起浏览器。
-6. **只做标准用户操作**（点击/键入/下拉选择）。**禁止** JS 注入改值、改 DOM/属性绕过校验、对 disabled 输入框强填、改遮挡元素层级；标准操作不可行时记录为「待确认/缺陷/环境观察」，**不许硬绕**。
-7. **失败分级**：接口 5xx/超时/网络错 = 环境观察，跳过不重试；页面明确报错 = 业务失败，重试 ≤1 次仍失败截图进缺陷清单；操作成功以数据状态变化为准，toast 仅辅助。**校验被拦截（有 toast/内联错误提示）= 已处理业务拦截，记「通过/已拦截」≠失败**（判定见 references/playwright-strategy.md 的「组件库防误读与多信号判定」）。
-8. **结束闸门**：**测试环境保留造数为预期**，仅当确需清理时才清理并留痕；须记录本轮产生数据（单据编号/扣减量）并在报告/缺陷清单注明。`record_baseline/assert_new_target` 仅用于防误动历史数据。证据截图归档到 `<产物根>/bug-reports/<功能>/`（产物根见 [environment.md](scripts/qa_skill_common/references/environment.md)），缺陷清单「证据」只写纯文件名；用 `ones_submit_defects.py` 提缺陷，缺主工单 URL 先问用户、**不许跳过**；报告/缺陷/用例归档到 `knowledge-base/` 对应目录。
-## 新站点适配侦察定式（2026-09-07 增补）
+### A. 红线（违反任一 = 本轮执行失败）
 
-> 适用：目标站点/组件库与固化站点（示例 Element UI 站点）不同（如自研 sy-*/div-table 组件、
-> 登录非 Keycloak、内容在 iframe/弹层）。此时固定选择器（.el-table__row 等）与固化登录不适用，
-> 按下面定式一次摸清，避免“侦察→试操作→失败→再侦察”循环：
+1. **只做标准用户操作**（点击 / 键入 / 下拉）。**禁止** JS 注入改值、改 DOM/属性绕过校验、对 disabled 输入框强填、改遮挡元素层级；标准操作不可行时记为「待确认/缺陷/环境观察」，**不许硬绕**。
+2. **禁止下载浏览器**：只用本机系统 Chrome/Edge/Chromium（`MES_BROWSER_PATH` 可指定）；**不执行** `playwright install`。
+3. **不脑补**：需求/接口/字段没有的一律不编造；必填字段来源不明就标「待确认/需造数」。
+4. **不泄露凭据**：账号、密码、Token、Cookie、个人敏感信息不写入报告、截图文件名或知识库。
+5. **不碰历史数据**：只操作本轮创建或用户明确授权的数据；未确认环境性质时按生产环境保守处理。
 
-1. **先做组件指纹探针（只读）**：dump 页面高频 class 前缀（el-* / sy-* / div-table / vxe / ag-）与 iframe 数，
-   判断是否与固化组件同源；不同即停用旧选择器，不自作假设套用。
-2. **入口用“全局搜索按功能名直达”**：优先用站点首页搜索框逐字输入功能名（部分搜索框对 fill 不触发过滤，
-   需 click→清空→逐字 type→点下拉项），得到「模块>分类>功能名」路径与直达 URL 后记录，不走菜单逐级点击。
-3. **一次会话内完成侦察并固化**：登录一次 → 组件指纹 + 入口 + TAB/主子表/弹窗结构（按钮/表头/弹窗祖先链）写入
-   references/<站点>-<功能>.md，之后所有用例脚本直接引用；结构侦察在同一会话内进行，页面不再重复 dump。
-4. **适配期例外**：全新组件库的首次适配允许侦察 >2 次，但每次必须把发现写进该页面 reference 并在下一次直接引用，
-   禁止反复打印整页文本/全部按钮；适配完成后按原「侦察≤2次」纪律执行。
-5. **交互组件先探后点**：弹窗/下拉/分体按钮（如「新增▾」）先读祖先链判断触发方式（click vs hover），
-   再决定用 Playwright 或 JS 可见点击（见 bbt_helpers 无视觉辅助），不盲点隐藏元素。
+### B. 默认做法（可自行决定，不必逐一确认）
 
+1. **复用固化脚本**：登录/导航用 `qa_skill_common`（`login_for_page`/`goto`），侦察用 `recon-generic/recon_page.py`，造数用 `bbt_osd_setup.py`，提缺陷用 `ones_submit_defects.py`；确有缺口才扩展，不另写平行替代脚本。
+2. **一次会话跑完**：一次登录 + 一个总入口长脚本串行跑完全部用例，不按用例反复起浏览器/登录。
+3. **等待优先级**：接口/响应基线等待 > 条件等待 > 固定 sleep（仅 ≤500ms 渲染余量/首次侦察兜底）。
+4. **侦察纪律**：同一页面侦察 ≤2 次，结果固化进 references 后直接引用；不 dump 整页文本。
+5. **失败分级**：接口 5xx/超时 = 环境观察，跳过不重试；页面明确报错 = 业务失败，重试 ≤1 次后进缺陷清单。**校验被拦截（有 toast/内联错误）= 已处理业务拦截，记「通过/已拦截」≠ 失败**。
+6. **环境勘察先行**：开工先确认浏览器可用、站点连通、账号可登录（可先跑 `python scripts/check_env.py`）。
 
-## 边界：何时不使用本技能
+### C. 停顿边界（只在这些情况才停下问用户）
+
+| 情形 | 处理 |
+| --- | --- |
+| 需要动本机状态（起常驻浏览器、复制 Edge 登录态、写桌面） | 执行前**一次**授权；授权后本次任务内不再逐步确认 |
+| 要提缺陷但没有工单 URL | 仍停（提缺陷属外部写入，需工单 URL） |
+| **只做黑盒测试、没有工单 URL** | **不停**：正常跑完，产出缺陷清单，末尾提示「未提缺陷（缺工单 URL）」 |
+| 新站点组件库/登录与固化不同 | **先试最小适配**（同一函数传参 / 环境变量 / 换选择器），成功即继续；只有登录形态无法推断时才停 |
+| 选择器命中失败 | 自行侦察 ≤2 次后调整，不必问 |
+| 标准操作不可行（disabled、遮挡等） | 不停不硬绕：记录「待确认/环境观察」，继续后续用例 |
+
+### D. 自动继续边界（无需确认即可自行继续）
+
+换页面 / 换用例、调整选择器、按最小适配改传参、失败重试 ≤1 次、追加用例、补截图、生成报告与缺陷清单 —— **都不需要**停下来问。
+
+> **结束闸门**：测试环境保留造数为预期，仅当确需清理时才清理并留痕；记录本轮产生数据（单据编号/扣减量）。
+> `record_baseline/assert_new_target` 仅用于防误动历史数据。证据截图归档到 `<产物根>/bug-reports/<功能>/`（产物根见 [environment.md](scripts/qa_skill_common/references/environment.md)），缺陷清单「证据」只写纯文件名；报告/缺陷/用例归档到 `<产物根>/knowledge-base/`。
+
+## 新站点适配侦察定式
+
+适用：目标站点组件库/登录与固化站点不同（自研组件、非 Keycloak、iframe 等）。
+定式（组件指纹 → 全局搜索直达 → 一次会话内侦察固化 → 交互先探后点）见 [references/playwright-strategy.md](references/playwright-strategy.md) 的「新站点适配侦察定式」。
+
+## 边界与默认原则
+
+**不使用本技能的情形**
 
 1. 有源代码且需要代码级定位时，优先代码审查/单测；黑盒只用于行为验证与缺陷复现。
 2. 未获授权的系统、账号、数据一律不做测试；确认不了环境性质时按生产环境保守处理。
 3. 用户明确要求白盒、性能/压测、安全渗透时，不属于本技能范围，先说明并转对应流程。
 
-## 默认原则
+**默认原则**
 
 1. 除代码、命令、网址、字段名、原始错误外，所有计划、用例、缺陷、报告和知识库内容使用中文。
 2. 不保存密码、Token、Cookie、个人敏感信息到报告、截图文件名或知识库。
@@ -90,27 +111,13 @@ description: >-
 3. **沙箱网络受限时（DNS 解析失败 / Operation not permitted），访问目标站点的浏览器/网络命令统一用非沙箱（require_escalated）执行，不要在沙箱内先试一遍再升级。**
 4. **浏览器定式**：被测 MES 站点统一用独立 Chromium + Keycloak 登录（`bbt_osd_common.login_ousida`）；ONES 常驻 Edge（CDP 9334）只用于 ONES 相关操作，不混用。
 5. **登录/导航零重复**：新页面直接用 `scripts/recon-generic/recon_page.py --url <URL>`（内置登录+导航+侦察），不要每个脚本重写；页面结构固化到 references 后直接引用。**判定走多信号**：操作结果用 `bbt_helpers.judge_action` / `api_wait.confirm_action`（toast+内联错误+新接口+数据变化四源交叉），不只看单层信号。
-6. 数据策略遵循必守 #8：测试环境保留造数（命名带测试标识便于追溯），仅在确需清理时清理并留痕；记录本轮产生数据。
-## 执行形态与等待基线（2026-09-07 增补）
+6. 数据策略遵循必守 C（结束闸门）：测试环境保留造数（命名带测试标识便于追溯），仅在确需清理时清理并留痕；记录本轮产生数据。
 
-> 目的：把“登录多次/固定 sleep 堆叠/每脚本单独提权审批”导致的耗时压下来。配套 helper 见
-> qa_skill_common（click_visible_text / open_split_add_dropdown / dump_visible_dialogs）与 scripts/api_wait.py。
+## 执行形态与等待基线
 
-1. **一个任务 = 一个常驻后台会话 + 一个总入口脚本（B5）**：
-   - 后台无头 Chrome（系统 Chrome executable_path，禁止下载浏览器）或 CDP 常驻会话，登录一次；
-   - 用例按「侦察固化 → 数据勘察 → P0→P1→P2 → 记录产生数据」顺序在**同一个总入口脚本**内串行跑完，
-     不按用例拆 N 个脚本反复登录/反复起浏览器；
-   - 总入口脚本建议一次请求用户批准（prefix 规则如 `python3 <run_dir>/scripts/run_all.py`），
-     避免每个小脚本单独提权打断；脚本内用 try/except 隔离单用例失败，失败截图继续跑后续用例。
-2. **等待优先级（B6）：接口/响应基线等待 > 条件等待 > 固定 sleep（兜底）**：
-   - 优先 `api_wait.ApiWatcher`：操作前 `snapshot()`，操作后 `wait_new(base)` 等“操作触发的业务接口”返回再断言；
-   - 无接口可观测/拿不到响应时用 `wait_visible / wait_text / wait_button / wait_until` 条件等待；
-   - 固定 `wait_for_timeout` 仅用于：接口已返回后的少量渲染余量（≤500ms）、首次侦察、无任何信号的兜底；
-   - 一次会话内所有用例共用监听器，不重复挂载。
-3. **无视觉模式纪律（A4）**：后台无头看不到截图时，截图只作证据归档，**判定一律用可见 DOM/文本/接口信号**；
-   交互用 `click_visible_text`（避免点到隐藏弹窗标题）、分体按钮用 `open_split_add_dropdown`、读弹窗用
-   `dump_visible_dialogs`；关键交互仍截图供人工抽核（防自动化误报）。
-
+**一个任务 = 一个常驻会话 + 一个总入口长脚本，一次登录串行跑完**；
+**等待优先级：接口/响应基线等待 > 条件等待 > 固定 sleep（仅 ≤500ms 渲染余量/首次侦察兜底）**。
+细节（总入口模板 `scripts/run_all_template.py`、`api_wait.ApiWatcher`、无视觉断言纪律）见 [references/playwright-strategy.md](references/playwright-strategy.md)。
 
 ## 快速分层
 
@@ -124,21 +131,7 @@ description: >-
 
 ## 测试用例生成
 
-需要完整用例表（标准功能测、深度专项测）时，统一调用 `$generate-manufacturing-test-cases` 技能生成用例，不自行手写。**注意：只要本轮提供了完整需求（哪怕你觉得凭理解也能列出来），也必须走该技能生成用例，禁止自行手写/自行设计用例表。**
-
-`$generate-manufacturing-test-cases` 生成步骤：
-
-1. 把本轮需求输入完整交给该技能：PRD 需求文档、业务流程图、补充规则聊天记录、字段明细表；
-   输入缺失先向用户补齐，或在该用例标注「需求未明确」。
-2. 指定颗粒度：
-   - 标准功能测 → 要求输出「标准功能测试版」：每个判断节点正反分支、字段规则、状态流转、联动影响各一条用例；
-   - 深度专项测 → 在标准版基础上追加边界值、组合筛选、数据一致性、权限隔离、回归与相邻影响面用例；
-   - 仅开发自测 → 要求输出「开发自测版」：合并同类校验、突出核心分支，前置条件直接给出数据配置方式。
-3. 拿到用例表（标准版八列：用例ID / 需求点 / 优先级 / 测试模块 / 测试点 / 前置条件 / 操作步骤 / 预期结果）后，
-   按优先级 P0 → P1 → P2 顺序执行（时间不足时先保 P0 与 P1）；先核对每条前置条件能否按「测试数据范围」造数，能造才执行；不能造数先向用户要数据。
-4. 逐条执行用例，统一挂错误监听（console / HTTP≥400 / 页面提示）；失败用例截图并按「缺陷记录格式」转入缺陷清单，需求引用取自用例的预期结果。
-   **执行时所有测试脚本共用一次登录**：复用同一浏览器会话/页面（登录/导航已固化在 `bbt_osd_common.login_ousida`），不要每个脚本新起浏览器 + 重新登录。
-5. 执行结果写回用例表：通过 / 失败 / 阻塞，附证据截图与需求引用；用例文档归档到 `test-cases/`。
+需要完整用例表（标准功能测、深度专项测）时，统一调用 `$generate-manufacturing-test-cases` 生成，**不自行手写**。颗粒度、八列格式、执行回写与共用一次登录等细节见 [references/test-scope.md](references/test-scope.md)。
 
 ## 快速核心流流程
 
@@ -150,34 +143,16 @@ description: >-
 4. 跑一条端到端主链路，例如：新增主表 → 新增子表 → 审核 → 明细/导出可见 → 取消审核 → 删除清理。
 5. 对每个必填、数值、日期、状态按钮只抽取最高风险用例验证，不做全排列。
 6. 失败时截图和记录步骤；通过项只记录结果，不重复截图。所有用例默认挂错误监听（console / HTTP≥400 / 页面提示），有错必报，防止"假通过"。
-7. 测试结束的数据处理遵循必守 #8：保留造数为主，确需清理时才清理并留痕，并记录本轮产生数据。
+7. 测试结束的数据处理遵循必守 C（结束闸门）：保留造数为主，确需清理时才清理并留痕，并记录本轮产生数据。
 
 **数据基线（防误动已有数据）**：测试开始前用 `bbt_helpers.record_baseline()`
 记录当前表格行标识（如单号），新增/编辑/删除目标先 `assert_new_target()` 核对，只操作基线外数据。
-（是否清理遵循必守 #8：测试环境保留造数，仅在确需清理时才删基线外数据。）
+（是否清理遵循必守 C（结束闸门）：测试环境保留造数，仅在确需清理时才删基线外数据。）
 
 ## IPC 单机/产线界面与交接班
 
-涉及工控机（IPC）页面时，**先读 `references/ipc-ui.md`**，其中包含：
-进入路径、解锁/选站、单机/产线入口、交接班操作、刷卡模拟与选择器速查。
-
-简要提醒：
-
-- 入口不要用首页搜索框，走「功能管理 → 业务流程」。
-- 辅助脚本优先用 `scripts/ipc_helpers.py`：
-  `setup_and_enter_ipc()` / `set_card_mock()` / `swipe_card()` / `open_handover_dialog()`。
-- 刷卡卡号按用户提供，缺省 `1`；系统解锁密码缺省 `123456`；站点缺省可随机选一个测试站点并记录。
-
-## 标准功能测范围
-
-标准模式的用例统一按「测试用例生成」一节调用 `$generate-manufacturing-test-cases`
-生成「标准功能测试版」，执行时逐条核销；本节列出的范围是生成用例时必须覆盖的补充点：
-
-1. 筛选：默认时间、多选下拉、模糊搜索、根据子表过滤主表。
-2. 表格：需求字段、格式、主子表联动、明细平铺、审核后可见性。
-3. 按钮：新增、编辑、复制、删除、审核、取消审核、打印、导入、导出。
-4. 校验：必填、0、负数、非数字、小数精度、超大值、空值、重复。
-5. 文件：模板字段、导入入口、导出字段、导出数据与页面一致性。
+涉及工控机（IPC）页面时**先读 [references/ipc-ui.md](references/ipc-ui.md)**（入口、解锁/选站、单机/产线、交接班、刷卡、选择器速查）。
+辅助脚本 `scripts/ipc_helpers.py`（`setup_and_enter_ipc` / `set_card_mock` / `swipe_card` / `open_handover_dialog`）；入口走「功能管理 → 业务流程」，不用首页搜索框。
 
 ## 造前置主数据
 
@@ -191,16 +166,6 @@ description: >-
 导入是否成功必须同时看页面导入窗口和 `linkim-pc/admin-console/simpleExcel/task/findOne`
 的最新返回，二者要一致；导入成功后还需刷新页面数据，再确认是否正确新增 / 覆盖数据。
 
-## 深度专项触发条件
-
-只有在用户明确要求或风险很高时执行深度专项：
-
-1. 金额、库存、批次、库位、先进先出、单位换算等数据正确性。
-2. 导入导出存在历史问题，或同请求导出结果不一致。
-3. 需要数据库只读核对。
-4. 多角色权限、跨租户、跨组织数据隔离。
-5. 修复后回归和相邻影响面验证。
-
 ## 修复后回归
 
 1. 按缺陷单复现：用原操作步骤确认问题在修复后是否消失。
@@ -212,70 +177,16 @@ description: >-
 
 ## Playwright 使用策略
 
-先读 `references/playwright-strategy.md`。核心约定（含 2026-09-03 新增的「组件库防误读与多信号判定」「级联/树选择（侦测先行）」两节，**详细规则只在该 reference，SKILL 不复述**）：
+详见 [references/playwright-strategy.md](references/playwright-strategy.md)（多信号判定、级联侦测先行、接口观测等待、失败分级、真窗口模式）。三条最常用：
 
 - 复用已有页面，不重复多开。
-- 优先条件等待，不用长时间固定 sleep。
-- **接口观测等待（必做）**：页面数据是接口返回后渲染的，操作后先等"业务接口返回"再断言页面数据，禁止直接固定 sleep 或立即读 DOM 下结论。
-  通用四步（业务不同无需预知接口路径，工具见 `scripts/api_wait.py`）：
-  1. 操作前 `base = watcher.snapshot()` 记录响应基线；
-  2. 执行操作（切页签/提交/刷卡/刷新）；
-  3. `new = watcher.wait_new(base, timeout=15)` 等基线之后出现新响应；无新响应 = 操作未生效（按钮没点中/请求被拦截），按失败处理，不硬读页面；
-  4. 少量渲染余量（~500ms）后再读 DOM 断言。
-  常见场景：打开弹窗 → 等新查询接口 → dump 结构；切页签 → 等新列表接口 → 读卡片；刷卡提交 → 等提交接口 → 断言 toast/状态。
-- 表格按列头读取，不硬编码 `td` 索引。
-- 截图语义化，缺陷现场必须保留。
-- **一次会话跑完全流程**：用 `scripts/session_helpers.py` 启动/连接常驻浏览器，一个长脚本跑完所有用例；一个会话只有一个持有者操作页面，收尾 `close_session` 清理标签页（避免多 playwright 客户端并发操作同一页面）。
-- **失败分级（防无限重试）**：环境失败（接口 502/超时/网络错误）→ 标记环境观察，立即跳过，不重试；业务失败（页面明确报错提示）→ 才算失败，重试最多 1 次。
-- **侦察→固化→引用纪律**：同一页面结构侦察最多 2 次；遇到新交互方式（如自定义弹窗/刷卡层）先补进 references 再继续，禁止反复 dump 同一页面。
-- **失败降级路径**：UI 操作连续失败达到重试上限后，改用**接口只读核验**数据状态（页面/接口一致性）确认结果，不再盲目重试；确认环境问题（代理/服务端异常）立即记录环境观察并跳过。
-- **接口核验替代（页面不渲染时）**：列表/明细页在自动化下不渲染（SPA/需菜单上下文/惰性加载）时，改用**接口只读核对**确认数据（如例中的 `ingredient/bom-preview` 已含全字段），并说明 UI 与接口差异，不硬读页面、不反复点。
-- **操作成功判定**：以数据状态变化为准（如页签卡片集合、接口 inUse/状态字段），toast 仅作辅助，不作为唯一判定依据。用 `bbt_helpers.judge_action` 综合「新接口+toast+内联错误+数据变化」四源，`processed=False` 且 reason=silent 才视为无反馈。
-- **失败隔离（用例间独立）**：每条用例 try/except 独立 + 前置 `bbt_helpers.reset_to(page, <URL>, 页签)` 回到已知态（含清勾选/关弹窗），避免单条失败中断整段或脏状态传染。
-- **证据统一归档**：测试结束把关键截图复制到 `<产物根>/bug-reports/功能名/` 目录，缺陷清单「证据」行只写纯文件名（不带分号/说明），便于提缺陷脚本解析。
-- **报告/缺陷清单自动生成**：执行脚本用 `scripts/report_gen.py` 从用例结果直接生成报告/缺陷清单骨架，AI 只补分析与定级；测试改数据后用 `scripts/data_cleanup.py` 对比基线并留痕（已恢复/未恢复）。
-- **真窗口/复用登录态（2026-09-04 新增）**：需要操控**日常 Chrome 已登录的真实窗口**时，用 Playwright MCP 扩展模式（`~/.codex/config.toml` 已配 `[mcp_servers.playwright]` `--extension`；装 Playwright MCP Bridge 扩展 + 重启 Codex 后生效）；安装/Token/纪律见 `references/playwright-strategy.md`「Playwright MCP 真窗口模式」。
+- **接口观测等待（必做）**：操作后先等业务接口返回再断言（`scripts/api_wait.py`），不直接读 DOM 下结论。
+- 用例间隔离：`try/except` + `reset_to` 回到已知态，单条失败不中断整段。
 
-## 测试工具箱（scripts/）
+## 测试工具箱 / 测试范围
 
-- `scripts/recon_page.py`：统一页面侦察器，一次输出 URL/标题/登录态/筛选控件/按钮/表格列头/可见弹窗字段，替代碎片化侦察。
-- `scripts/recon-generic/`：通用页面侦察工具（`--url` 参数化，Element UI 页面可复用）：
-  - `recon_page.py --url <URL>`：按钮/表头/行/弹窗；
-  - `recon_dialog.py --url <URL> --button 新增`：弹窗表单字段结构（label + 控件类型）；
-  - `recon_dropdown.py --url <URL> --button 新增`：下拉可见选项；
-  - `recon_subtables.py --url <URL>`：点击主表行 dump 子表。
-- `scripts/bbt_helpers.py`：
-  - **无视觉/盲操作辅助（2026-09-07 新增）**：`click_visible_text(page, text)`（JS 点可见精确文本，自动避开隐藏弹窗标题）、
-    `open_split_add_dropdown(page)`（真实 hover 展开「新增▾」类下拉并点首项，如子表「导入 Excel」）、
-    `dump_visible_dialogs(page)`（只读可见弹窗文本，替代整页 innerText）。
-  - `find_page(ctx, url_contains, title_contains)` / `connect(cdp_url, url_contains=..., title_contains=...)`：连常驻浏览器并优先复用已有页面；
-  - `attach_error_watchers(page)` / `collect_toasts()` / `error_report()`：console、HTTP≥400、页面提示三路错误监听；
-  - `wait_visible` / `wait_text` / `wait_button` / `wait_toast(page, keyword)` / `wait_until`：条件等待（元素/文本/按钮/提示），替代固定 sleep；
-  - `retry(fn, attempts=2)` / `close_dialog(page)`：防无限重试、弹窗收尾清理；
-  - `recon_page_structure(page)` / `recon_once(page, url)`：一次性侦察返回页面结构，供固化；
-  - `table_columns()` / `read_table_rows()`：按列头读表格；
-  - `snap(page, name, out_dir, feature)`：语义化截图命名；
-  - `record_baseline()` / `assert_new_target()`：数据基线记录与核对。
-  - **防误报/隔离（2026-09-03 新增）**：`read_feedback(page)`（toast+内联错误+可见dialog）、`active_dialog/read_dialog`（作用域读弹窗）、`judge_action(page,action,...)`（多信号判定，`processed=False` 且 reason=silent 才视为无反馈）、`detect_cascade/select_cascade`（**先侦测两级父→子、匹配才走**级联）、`click_or_observe`（先判 disabled，禁用作状态观察）、`reset_to(page,url,页签)`（用例隔离回已知态）。详细用法见 references/playwright-strategy.md。
-- `scripts/api_wait.py`：接口观测等待（核心等待方式，替代固定 sleep）。
-  - `ApiWatcher(page)`：挂 response 监听（覆盖所有 frame）；
-  - `snapshot()`：操作前取响应基线；`wait_new(base, keyword=None, timeout=15)`：等基线之后出现新响应（可用 URL 关键词缩小范围）；
-  - `confirm_action(page, action, keyword=None)`：统一操作判定（执行操作→等新接口→收集 HTTP≥400 与 toast→返回 ok/errors），失败原因可直接进缺陷清单；
-  - 业务不同无需预知接口路径，靠基线对比动态识别；无新响应 = 操作未生效。
-- `scripts/session_helpers.py`：一次会话常驻浏览器助手。
-- `scripts/run_all_template.py`：**总入口长脚本模板（B5/B6）**——一个任务一个后台会话一次登录跑完全部用例；
-  复制改名为 run_all.py 后按任务改 CONFIG/CASES 即可，建议一次提权批准该总入口（prefix 如 `python3 <run>/run_all.py`）。
-  - `launch_session(headless, cdp_port)`：启动新 Chromium（可暴露 CDP 端口）；`connect_session(cdp_url, url_contains)`：连接常驻浏览器并复用已有页面；
-  - `close_session(...)`：收尾清理标签页；约定一个会话一个持有者。
-- `scripts/report_gen.py`：报告/缺陷清单骨架生成（`gen_report` / `gen_bug`），执行脚本直接喂结果生成 markdown，AI 只补分析。
-- `scripts/data_cleanup.py`：数据基线对比与清理留痕（`compare_state` / `write_cleanup_note`）。**按需使用**：测试环境保留造数为主，仅在确需清理时对比基线并记录已保留/已恢复（遵循必守 #8）。
-- `scripts/ipc_helpers.py`：IPC 单机/产线界面导航辅助。
-  - `unlock_ipc(page, system_password, base_url)`：进入 `/ipc/setting` 并解锁；
-  - `select_station_and_save(page, station)`：精确选站并保存配置；
-  - `enter_ipc_feature(page, feature, base_url)`：在 `/ipc` 首页进入 `/ipc/single` 或 `/ipc/line`；
-  - `setup_and_enter_ipc(...)`：组合上述三步。系统密码与站点由调用方传入，不写死；
-  - `set_card_mock(page, card)` / `swipe_card(page, card)`：交接班刷卡测试模拟；
-  - `open_handover_dialog(page)`：进入单机界面后打开交接班弹窗。
+- 工具速查（bbt_helpers / api_wait / report_gen…）：[references/toolbox.md](references/toolbox.md)
+- 标准功能测范围 与 深度专项触发条件：[references/test-scope.md](references/test-scope.md)
 
 ## 数据库与接口辅助
 
@@ -283,6 +194,8 @@ description: >-
 只做用户授权范围内的只读查询；凭据按环境变量 → 本机凭据 → DataGrip 配置的顺序取。
 
 ## 缺陷记录、报告与归档
+
+缺陷清单字段/标题/证据行必须符合[缺陷清单格式契约](scripts/qa_skill_common/references/bug-report.md)（生成侧已固化，改格式会被自检拦住）。
 
 需要缺陷字段模板、严重程度口径、快速报告模板或归档规则时，
 先读 `references/reporting.md`。

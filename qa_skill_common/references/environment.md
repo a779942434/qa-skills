@@ -15,7 +15,19 @@
 | 系统浏览器 | Chrome / Edge（**禁止下载浏览器**） | 安装 Chrome/Edge；或用 `MES_BROWSER_PATH` 指定路径 |
 | 被测站点账号 | 能登录目标 MES 的账号 | 见下方 `MES_ACCOUNT` / `MES_PASSWORD` |
 
+| 操作系统 | Windows / macOS / Linux 均可（浏览器探测跨平台） | —— |
+
 > ⚠️ 只允许 `pip install playwright`（装 Python 包），**不要**执行 `playwright install`（会下载浏览器，技能明确禁止）。
+
+**`MES_BROWSER_PATH` 示例**
+```bash
+# macOS
+export MES_BROWSER_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+# Windows (PowerShell)
+$env:MES_BROWSER_PATH="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+# Linux
+export MES_BROWSER_PATH="/usr/bin/google-chrome"
+```
 
 ## 二、环境变量总表
 

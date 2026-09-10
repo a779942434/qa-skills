@@ -15,6 +15,8 @@ description: >-
 # ONES 缺陷全流程（创建 / 回归后处理 / 主工单流转）
 
 > 本技能自带公共实现（`scripts/qa_skill_common/`），**可独立安装**，无需同级 `qa_skill_common`；公共实现由仓库根 `vendor-common.sh` 统一生成。
+>
+> **按需加载**：只读本文件即可开工；仅当触发对应场景时再读 `references/ones-ui.md` 或 `scripts/qa_skill_common/references/*.md`。
 
 ## 首次使用（3 步）
 
@@ -138,19 +140,6 @@ description: >-
 
 ## 资源
 
-- `scripts/check_env.py`：使用前自检（依赖、配置、Edge/登录态、CDP、清单目录）。
-- `scripts/ones_edge_server.py`：启动常驻 Edge（自动准备登录态 + 端口检测 + 健康检查 + 日志）。
-- `scripts/edge_session_setup.py`：复制本机 Edge 登录态（幂等，`--force` 强制）。
-- `scripts/ones_helpers.py`：CDP 连接 + ONES 接口封装
-  （search_user / get_task_required_fields / get_current_user / get_transitions /
-   send_comment / build_defect_fields / create_linked_defect）
-  + 新建缺陷弹窗稳定交互
-  （open_defect_form / set_select_option / set_desc / upload_evidence /
-   submit_defect / capture_field_options_fiber / list_related_tasks / dedup_check）。
-- `scripts/ones_submit_defects.py`：一键批量提缺陷 CLI（读清单 + profile 字段缓存 + 默认严重程度一般 + 负责人/验证人=登录账号 + 证据上传）。
-- `scripts/ones_project_setup.py`：新项目接入脚本（自动发现字段/系统环境 uuid/scope，写入 field-mapping.yaml profile）。
-- `scripts/ones_backfill_evidence.py`：给已建缺陷补传/回填证据文件。
-- `scripts/ones_config.py`：配置加载（YAML → 环境变量 → 平台默认）。
-- `config/settings.yaml`：环境/浏览器配置；`config/field-mapping.yaml`：字段映射与证据目录索引。
-- `references/ones-ui.md`：选择器速查、字段映射、编辑器/上传/粘贴、缺陷单与主工单状态流转细节。
-- `scripts/qa_skill_common/references/datagrip.md`：数据库只读核对（DataGrip 数据源发现 / 只读查询，随技能内置）。
+- 脚本：`scripts/` 下 `check_env.py`（自检）、`ones_bootstrap.py`（一键引导）、`ones_edge_server.py` / `edge_session_setup.py`（常驻浏览器/登录态）、`ones_submit_defects.py`（批量提缺陷 CLI）、`ones_project_setup.py`（新项目接入）、`ones_backfill_evidence.py`（证据回填）、`ones_config.py`（配置）、`ones_helpers.py`（CDP + ONES 接口/弹窗封装）。
+- 配置：`config/settings.yaml`（环境/浏览器）、`config/field-mapping.yaml`（字段映射与证据目录）。
+- 文档：`references/ones-ui.md`（选择器速查、字段映射、编辑器/上传、状态流转）、`scripts/qa_skill_common/references/{environment,bug-report,datagrip}.md`。

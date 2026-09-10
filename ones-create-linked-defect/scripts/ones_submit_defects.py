@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from qa_skill_common import bug_report_schema as bug_schema  # noqa: E402
 from qa_skill_common import paths as qa_paths  # noqa: E402
 from ones_config import load_field_mapping  # noqa: E402
 from ones_helpers import (  # noqa: E402
@@ -60,26 +61,16 @@ def expand_keys(tokens):
 
 
 def parse_bug_report(md_path):
-    """解析缺陷清单，兼容两种标题格式：
-       ### BUG-编号：标题
-       ## BUG-编号【严重程度】标题
-    都会去掉【严重程度】前缀，并按行提取证据文件。"""
+    """解析缺陷清单（契约单一来源：qa_skill_common.bug_report_schema）。
+
+    标题格式 `### BUG-编号：标题`；字段与证据行规则见 schema；
+    解析出错时打印 [清单校验] 提示（不静默丢字段）。
+    """
     text = Path(md_path).read_text(encoding="utf-8")
-    headers = list(re.finditer(r"(?m)^#{2,3}\s*(BUG-[A-Za-z0-9-]+)\s*(?:【[^】]*】)?\s*([^\n]+)", text))
-    bugs = []
-    for i, m in enumerate(headers):
-        key, title = m.group(1), m.group(2).strip()
-        end = headers[i + 1].start() if i + 1 < len(headers) else len(text)
-        body = text[m.end():end]
-        evidence = []
-        for em in re.finditer(r"(?m)^\s*[-*]\s*(.+)$", body):
-            line = re.sub(r"^证据[:：]\s*", "", em.group(1).strip())
-            for tok in re.split(r"[\s、,，]+", line):
-                tok = tok.strip()
-                if re.search(r"\.(?:png|jpg|jpeg|gif|xlsx|csv|txt)$", tok, re.IGNORECASE):
-                    evidence.append(tok)
-        bugs.append({"key": key, "title": title, "evidence": evidence, "desc": body.strip()})
-    return bugs
+    result = bug_schema.parse(text)
+    for err in result["errors"]:
+        print(f"[清单校验] {err}", file=sys.stderr)
+    return result["bugs"]
 
 
 def profile_overrides(profile):

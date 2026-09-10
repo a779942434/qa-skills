@@ -11,6 +11,8 @@
 用法示例见 web-blackbox-testing.md。
 """
 import os
+import shutil
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -32,22 +34,67 @@ __all__ = [
 from playwright.sync_api import sync_playwright
 
 
+_WIN_BROWSER_RELS = (
+    ("Google", "Chrome", "Application", "chrome.exe"),
+    ("Microsoft", "Edge", "Application", "msedge.exe"),
+    ("Chromium", "Application", "chrome.exe"),
+)
+_WIN_BROWSER_ROOTS_ENV = ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA")
+
+
+def _iter_windows_browser_paths():
+    """枚举 Windows 常见浏览器安装路径（用路径段拼接，跨平台一致、便于测试）。"""
+    for env in _WIN_BROWSER_ROOTS_ENV:
+        root = os.environ.get(env)
+        if not root:
+            continue
+        for parts in _WIN_BROWSER_RELS:
+            yield str(Path(root).joinpath(*parts))
+
+
 def _chrome_candidates():
-    """返回本机候选浏览器可执行文件（系统 Chrome/Edge/Chromium + 常见路径 + 环境变量覆盖）。"""
+    """返回本机候选浏览器可执行文件（跨平台）。
+
+    优先级：MES_BROWSER_PATH > PATH 中的可执行名 > 平台常见安装路径。
+    平台：Windows / macOS / Linux；均使用本机系统浏览器，**不下载**。
+    """
     cands = []
     env = os.environ.get("MES_BROWSER_PATH", "").strip()
     if env:
         cands.append(env)
+
+    # PATH 中直接可用的可执行名（Windows/macOS/Linux 通用）
+    for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+                 "chrome", "msedge", "chrome.exe", "msedge.exe"):
+        found = shutil.which(name)
+        if found:
+            cands.append(found)
+
+    # macOS
     cands += [
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
         "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    ]
+    # Linux
+    cands += [
         "/usr/bin/google-chrome",
         "/usr/bin/google-chrome-stable",
         "/usr/bin/chromium",
         "/usr/bin/chromium-browser",
+        "/snap/bin/chromium",
     ]
-    return [c for c in cands if c and Path(c).exists()]
+    # Windows（以 .exe 结尾的路径才做存在性判断）
+    cands += list(_iter_windows_browser_paths())
+
+    seen, out = set(), []
+    for c in cands:
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        if Path(c).exists():
+            out.append(c)
+    return out
 
 
 def launch_mes_browser(pw, headless=True):
