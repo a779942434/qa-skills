@@ -1,0 +1,4 @@
+interface:
+  display_name: "Web 黑盒测试"
+  short_description: "无源码场景下黑盒/冒烟/回归测试与缺陷清单留档"
+  default_prompt: "使用 $web-blackbox-testing 对该网站按核心流程做黑盒测试，输出中文缺陷清单并留档。"

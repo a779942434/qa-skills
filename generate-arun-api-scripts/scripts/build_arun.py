@@ -214,22 +214,24 @@ def build_script_step(spec):
 
 def build_controller_step(spec):
     controller = spec.get("controller")
-    if controller not in ("for", "if", "while"):
-        raise ValueError(f"未知 controller: {controller}")
+    if controller not in ("for", "if"):
+        raise ValueError(f"未知 controller: {controller}（仅支持 for / if）")
     step = {"controller": controller}
     for key, value in spec.items():
         if key in ("controller", "steps", "elif_branches", "else_steps"):
             continue
         step[key] = copy.deepcopy(value)
     step["steps"] = build_steps(spec.get("steps", []))
-    elif_branches = []
-    for br in spec.get("elif_branches", []):
-        branch = copy.deepcopy(br) if isinstance(br, dict) else br
-        if isinstance(branch, dict) and "steps" in branch:
-            branch["steps"] = build_steps(branch["steps"])
-        elif_branches.append(branch)
-    step["elif_branches"] = elif_branches
-    step["else_steps"] = build_steps(spec.get("else_steps", []))
+    # elif_branches / else_steps 是 if 专属字段，for 步骤不注入，避免污染 for 控制器
+    if controller == "if":
+        elif_branches = []
+        for br in spec.get("elif_branches", []):
+            branch = copy.deepcopy(br) if isinstance(br, dict) else br
+            if isinstance(branch, dict) and "steps" in branch:
+                branch["steps"] = build_steps(branch["steps"])
+            elif_branches.append(branch)
+        step["elif_branches"] = elif_branches
+        step["else_steps"] = build_steps(spec.get("else_steps", []))
     return step
 
 
@@ -293,7 +295,7 @@ def load_spec(path):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("spec", help="步骤清单 JSON/YAML 文件路径")
-    parser.add_argument("-o", "--output", help="输出 JSON 文件路径；缺省输出到 stdout")
+    parser.add_argument("-o", "--output", help="输出 JSON 文件路径；缺省输出到 ~/Desktop/<步骤名>_arun.json，传 - 时输出到 stdout")
     parser.add_argument(
         "--compact",
         action="store_true",

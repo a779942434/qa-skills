@@ -59,10 +59,10 @@ description: >-
 不用等用户给控制器 JSON：
 
 - **for 循环**：`循环` / `逐个` / `每个都` / `依次` / `把……列表全部……` / `重复 N 次` / `直到处理完` / `未……的人逐个……`
-  → `{"controller": "for", "mode": "times", "times": "${<计数变量>}", "interval": "2", "steps": [...]}`。
+  → `{"controller": "for", "mode": "times", "times": "${<计数变量>}", "interval": "2", "break_on_success": false, "continue_on_failure": false, "close": true, "steps": [...]}`。
   循环次数/列表来自前一步 teardown 提取（`arun.set('<计数变量>', len(...))` 或存列表变量）。
 - **if 条件**：`如果` / `若` / `当……时` / `否则` / `为空则` / `不为空才` / `满足才执行` / `只有……才` / `存在才……`
-  → `{"controller": "if", "condition": "${a} == ${b}", "steps": [...], "elif_branches": [], "else_steps": [], "elseClose": true}`。
+  → `{"controller": "if", "condition": "${a} == ${b}", "steps": [...], "elif_branches": [], "else_steps": [], "elseClose": true, "ignore": false, "close": true}`。
   条件不满足直接跳过用 `"elseClose": true`；多分支用 `elif_branches` / `else_steps`。
 - **语法要点**：控制器字段（`times` / `condition` 等）用 ARun 平台 `${var}` 插值语法；
   控制器内部接口步骤的 body 仍用 `$var`；两者共存，互不替代。
