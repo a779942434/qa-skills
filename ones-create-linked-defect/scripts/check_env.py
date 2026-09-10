@@ -1,33 +1,32 @@
 # -*- coding: utf-8 -*-
-"""使用前自检：一键检查 skill 运行环境是否就绪。
+"""使用前自检：一键检查 ONES 技能运行环境是否就绪。
 
 用法: python scripts/check_env.py
 
+公共检查项（依赖等）复用 qa_skill_common.env_check；以下是 ONES 专属项。
+
 检查项:
-    1. Python / Playwright / PyYAML
+    1. Python / Playwright / PyYAML（公共）
     2. Edge 可执行文件
-    3. 本机 Edge 登录态源目录
-    4. 会话目录状态（已就绪 / 需运行 edge_session_setup.py）
+    3. 本机 Edge 登录态源
+    4. 会话目录状态（已就绪 / 需运行 ones_bootstrap.py）
     5. CDP 端口可用性（常驻浏览器是否已启动）
     6. 配置文件可解析
     7. bug-reports 缺陷清单目录（警告级别）
 
 退出码：存在 FAIL 返回 1，否则返回 0。
+环境与全部变量的总表见 scripts/qa_skill_common/references/environment.md。
 """
 import socket
 import sys
 from pathlib import Path
 
-from ones_config import CONFIG_DIR, load_field_mapping, resolve_settings
+SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
-RESULTS = []
-
-
-def check(name, ok, detail="", warn=False):
-    RESULTS.append((name, ok, detail, warn))
-    tag = "WARN" if (not ok and warn) else ("PASS" if ok else "FAIL")
-    suffix = f"  [{detail}]" if detail else ""
-    print(f"  [{tag}] {name}{suffix}")
+from qa_skill_common import env_check as ec  # noqa: E402
+from ones_config import load_field_mapping, resolve_settings  # noqa: E402
 
 
 def port_open(port):
@@ -37,79 +36,78 @@ def port_open(port):
 
 
 def main():
-    print("== ONES skill 环境自检 ==")
+    results = []
 
-    # 1. 依赖
-    deps_ok = True
-    for mod in ("playwright", "yaml"):
-        try:
-            __import__(mod)
-            check(f"依赖 {mod}", True)
-        except ImportError:
-            deps_ok = False
-            check(f"依赖 {mod}", False, "pip install " + ("playwright" if mod == "playwright" else "pyyaml"))
+    # 1. 依赖（公共）
+    results += ec.check_deps()
 
     # 2. 配置
     try:
         settings = resolve_settings()
         field_map = load_field_mapping()
-        check("配置文件可解析", True)
-    except Exception as exc:
+        results.append(ec.ok("配置文件可解析"))
+    except Exception as exc:  # noqa: BLE001
         settings = None
         field_map = {}
-        check("配置文件可解析", False, str(exc))
+        results.append(ec.fail("配置文件可解析", str(exc)[:120]))
 
-    # 3. Edge / 登录态源
     if settings:
+        # 3. Edge / 登录态源
         edge_exe = settings["edge"]["executable"]
-        check("Edge 可执行文件", bool(edge_exe) and Path(edge_exe).exists(), edge_exe or "未探测到")
+        results.append(
+            ec.ok("Edge 可执行文件", str(edge_exe))
+            if edge_exe and Path(edge_exe).exists()
+            else ec.fail("Edge 可执行文件", str(edge_exe or "未探测到"), "安装 Edge 或设置 ONES_EDGE_EXE")
+        )
 
         src = settings["edge"]["user_data_source"]
         src_ok = bool(src) and Path(src).exists() and any(
             p.exists()
-            for p in (
-                Path(src) / "Default" / "Network" / "Cookies",
-                Path(src) / "Default" / "Cookies",
-            )
+            for p in (Path(src) / "Default" / "Network" / "Cookies", Path(src) / "Default" / "Cookies")
         )
-        check("本机 Edge 登录态源", src_ok, src or "未探测到", warn=True)
+        results.append(
+            ec.ok("本机 Edge 登录态源", str(src))
+            if src_ok
+            else ec.warn("本机 Edge 登录态源", str(src or "未探测到"), "确认本机 Edge 已登录过 ONES / 飞书")
+        )
 
         session_dir = Path(settings["edge"]["session_dir"])
         session_ok = any(
             p.exists()
-            for p in (
-                session_dir / "Default" / "Network" / "Cookies",
-                session_dir / "Default" / "Cookies",
-            )
+            for p in (session_dir / "Default" / "Network" / "Cookies", session_dir / "Default" / "Cookies")
         )
-        check("会话目录已就绪", session_ok, str(session_dir), warn=True)
+        results.append(
+            ec.ok("会话目录已就绪", str(session_dir))
+            if session_ok
+            else ec.warn("会话目录已就绪", str(session_dir), "运行 python scripts/ones_bootstrap.py --apply")
+        )
 
         # 4. CDP 端口
         port = settings["cdp_port"]
-        if port_open(port):
-            check(f"CDP {port} 已就绪", True, "常驻浏览器运行中")
-        else:
-            check(f"CDP {port} 已就绪", False, "未启动；运行 python scripts/ones_edge_server.py", warn=True)
+        results.append(
+            ec.ok(f"CDP {port} 已就绪", "常驻浏览器运行中")
+            if port_open(port)
+            else ec.warn(f"CDP {port} 已就绪", "未启动", "运行 python scripts/ones_bootstrap.py --apply")
+        )
 
         # 5. 缺陷清单目录
         bug_dir = Path(settings["bug_reports_dir"])
-        check("缺陷清单目录存在", bug_dir.exists(), str(bug_dir), warn=True)
+        results.append(
+            ec.ok("缺陷清单目录存在", str(bug_dir))
+            if bug_dir.exists()
+            else ec.warn("缺陷清单目录存在", str(bug_dir), "可由 web-blackbox-testing 产出，或设 ONES_BUG_REPORTS_DIR")
+        )
 
     # 6. 字段映射关键项
     if field_map:
         missing = [k for k in ("priority",) if not field_map.get(k)]
-        check("字段映射关键项", not missing, "缺: " + ", ".join(missing) if missing else "P2 已配置；处理人/负责人动态取自主工单与登录账号")
+        results.append(
+            ec.ok("字段映射关键项", "P2 已配置；处理人/负责人动态取自主工单与登录账号")
+            if not missing
+            else ec.fail("字段映射关键项", "缺: " + ", ".join(missing))
+        )
 
-    print("==")
-    fails = [r for r in RESULTS if not r[1] and not r[3]]
-    warns = [r for r in RESULTS if not r[1] and r[3]]
-    print(f"结果: {len(RESULTS) - len(fails) - len(warns)} PASS, {len(warns)} WARN, {len(fails)} FAIL")
-    if fails:
-        print("请先解决 FAIL 项再执行任务。")
-        return 1
-    if warns:
-        print("WARN 项不阻塞，但注意按提示处理。")
-    return 0
+    return ec.report("ONES skill 环境自检", results)
 
 
 if __name__ == "__main__":

@@ -7,3 +7,4 @@ node_modules/
 /knowledge-base
 /ones-create-linked-defect/config/field-mapping.local.yaml
 .idea/
+/runs/

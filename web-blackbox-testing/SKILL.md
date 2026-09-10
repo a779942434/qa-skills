@@ -12,6 +12,18 @@ description: >-
 # Web 黑盒测试
 
 > 本技能自带公共实现（`scripts/qa_skill_common/`），**可独立安装**，无需同级 `qa_skill_common`；公共实现由仓库根 `vendor-common.sh` 统一生成。
+
+## 首次使用（3 步）
+
+1. **自检**：`python scripts/check_env.py` —— 有 FAIL 先按「修复指引」补齐（缺浏览器 / 缺依赖 / 站点不通都会明确指出）。
+2. **配环境**：按 [环境与前置配置总表](scripts/qa_skill_common/references/environment.md) 设置 `MES_URL` / `MES_ACCOUNT` / `MES_PASSWORD`（IPC、数据库、ONES 变量按需）。
+   ```bash
+   export MES_URL="http://<你的测试站点>" MES_ACCOUNT="admin" MES_PASSWORD="<密码>"
+   ```
+3. **开跑**：把站点 URL + 账号 + 需求文档发我即可；标准功能测会先出用例再执行。
+
+> 只装 Python 包用 `pip install playwright pyyaml`；**不要**执行 `playwright install`（技能禁止下载浏览器，用本机系统 Chrome/Edge）。
+
 ## 开工速查（2026-09-07 增补，先读这一节再往下，防重复踩坑）
 
 > 这些规则对应历史上反复出现的耗时/误报点，均已固化到下文对应章节与 qa_skill_common：

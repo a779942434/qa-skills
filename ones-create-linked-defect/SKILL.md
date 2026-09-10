@@ -16,6 +16,14 @@ description: >-
 
 > 本技能自带公共实现（`scripts/qa_skill_common/`），**可独立安装**，无需同级 `qa_skill_common`；公共实现由仓库根 `vendor-common.sh` 统一生成。
 
+## 首次使用（3 步）
+
+1. **自检**：`python scripts/check_env.py` —— 有 FAIL 先按「修复指引」补齐。
+2. **一键引导常驻浏览器**：`python scripts/ones_bootstrap.py`（默认 dry-run，只自检+打印步骤，不改本机）；
+   确认后 `python scripts/ones_bootstrap.py --apply` 后台启动常驻 Edge（自动复制本机 Edge 登录态）。
+   **首次登录 / 飞书授权**加 `--visible` 完成 SSO，之后再切回默认静默运行。
+3. **配环境（按需）**：ONES 相关变量与配置文件见 [环境与前置配置总表](scripts/qa_skill_common/references/environment.md)。
+
 ## 概述
 
 在 ONES 项目管理中，把本地 `bug-reports/` 缺陷清单的缺陷登记为工单的关联缺陷工作项，
