@@ -26,20 +26,14 @@ description: >-
    ```
 3. **开跑**：把站点 URL + 账号 + 需求文档发我即可；标准功能测会先出用例再执行。
 
-> 只装 Python 包用 `pip install playwright pyyaml`；**不要**执行 `playwright install`（技能禁止下载浏览器，用本机系统 Chrome/Edge）。
+> 依赖只装 Python 包：`pip install playwright pyyaml`（**不要** `playwright install`）。
 
-## 开工速查（2026-09-07 增补，先读这一节再往下，防重复踩坑）
+## 高频坑速查（两条最贵的）
 
-> 这些规则对应历史上反复出现的耗时/误报点，均已固化到下文对应章节与 qa_skill_common：
-1. **新站点先按 A1 适配，不套旧站点选择器/登录**：先跑组件指纹（el-*/sy-*/div-table/iframe），
-   登录形态不同（非 Keycloak）先侦察再改；入口用全局搜索按功能名直达（见「新站点适配侦察定式」）。
-2. **盲点按钮/隐藏弹窗标题是高频误点源**：点击一律用 `bbt_helpers.click_visible_text`；
-   「新增▾」类下拉用 `open_split_add_dropdown`；读弹窗用 `dump_visible_dialogs`（A4，已进 qa_skill_common）。
-3. **执行形态（B5）**：一个任务 = 一个后台会话 + 一次登录 + 一个总入口脚本串行跑完，
-   总入口模板见 `scripts/run_all_template.py`；一次提权批准总入口，不再逐脚本审批/逐脚本登录。
-4. **等待基线（B6）**：接口/响应基线等待 > 条件等待 > 固定 sleep（仅 ≤500ms 渲染余量/首次侦察兜底）。
-5. **无视觉模式**：截图仅证据，判定只看可见 DOM/文本/接口信号，关键交互截图供人工抽核。
+1. **新站点先适配再动手**：先跑组件指纹（`el-*` / `sy-*` / `div-table` / iframe）与登录形态；不同就换选择器/登录，不套旧站点。入口优先用**全局搜索按功能名直达**，不走菜单逐级点。
+2. **盲点按钮/隐藏弹窗是高频误点源**：点击用 `bbt_helpers.click_visible_text`；「新增▾」类下拉用 `open_split_add_dropdown`；读弹窗用 `dump_visible_dialogs`。
 
+> 执行形态（一次会话一个总入口脚本）、等待基线、无视觉判定等已归入下方「必守清单 B」与「执行形态与等待基线」，此处不重复。
 
 目标：在授权测试环境中，用最少步骤验证最大业务风险，并把结论用中文留档。默认优先快测，不追求一次覆盖所有细枝末节。
 
