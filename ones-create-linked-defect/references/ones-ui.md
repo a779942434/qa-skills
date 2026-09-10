@@ -33,21 +33,21 @@
 
 ### 缺陷字段 UUID 映射表（实测，跨项目基本稳定，换项目只改 config/field-mapping.yaml 的取值）
 
-| 字段 UUID | 含义 | 取值示例（奥联） |
+| 字段 UUID | 含义 | 取值示例（示意；真实值放 config/field-mapping.local.yaml） |
 | --- | --- | --- |
 | `field001` | 标题 | 【排产结果】… |
 | `field002` | 描述 | 缺陷清单内容 |
-| `5nUKjALP` | 来源项目 | 奥联电子-1期\|KH0091-01（`AzLXVpia`） |
-| `Wq56Wyjw` | 产品负责人 | 张晴晴（`3cAXW7MC`） |
-| `Jtnem8qs` | 来源客户 | KH0091奥联电子（`8qRUnWa2`） |
-| `R3UqL3Vm` | 系统环境 | t-aolian-奥联集成环境（uuid 需 `capture_field_options_fiber()` 捕获后缓存） |
-| `W9qkyVXr` | 功能模块（新） | 计划管理（`2s221obZ`） |
+| `5nUKjALP` | 来源项目 | <来源项目名>（`<选项uuid>`） |
+| `Wq56Wyjw` | 产品负责人 | <产品负责人>（`<uuid>`） |
+| `Jtnem8qs` | 来源客户 | <来源客户名>（`<选项uuid>`） |
+| `R3UqL3Vm` | 系统环境 | <系统环境名>（uuid 需 `capture_field_options_fiber()` 捕获后缓存） |
+| `W9qkyVXr` | 功能模块（新） | <功能模块>（`<选项uuid>`） |
 | `field012` | 优先级 | P2（`JYC3tQnb`） |
 | `field004` | 负责人 | 当前 ONES 登录账号（`get_current_user()`，localStorage `user_id`） |
 | `Sg5vqjRr` | 验证人 | 当前 ONES 登录账号（`get_current_user()`） |
-| `95jUV2Mb` | 处理人 | 安杰（后端 `1vmJxxsw`）/ 王斌（前端 `JGwXEzXq`） |
+| `95jUV2Mb` | 处理人 | <后端人员>（`<uuid>`）/ <前端人员>（`<uuid>`） |
 | `field038` | 严重程度 | 默认「一般」；黑盒报告的 P0~P4 仅自用，不据此定级 |
-| `DPNDusA2` | 测试责任人 | 廖柏全 |
+| `DPNDusA2` | 测试责任人 | <测试责任人> |
 | `NnkkhDGK` | 缺陷分类 | 按需 |
 
 ## 全局常量表（不随项目变，勿每次重新发现）
@@ -57,7 +57,7 @@
 | 严重程度 option uuid | 致命 `Dgk6PHkS`、严重 `QYe31Dn9`、一般 `XxwMNPQp`、提示 `A3HEmFsu`、建议 `RDtgWTEi`、保留 `MnAwAecn`（`ones_helpers.SEVERITY`） |
 | 提交默认严重程度 | 一般（`ones_helpers.DEFAULT_SEVERITY`）；黑盒报告的 P0~P4 仅内部自用 |
 | 当前登录账号 | `localStorage.user_id` / `user_name`（`ones_helpers.get_current_user()`），负责人/验证人用它 |
-| 缺陷类型 scope | 从同团队历史缺陷 `tasks/info` 的 `issue_type_scope_uuid` 读（欧斯达 `M33Rzztq`），写入 profile |
+| 缺陷类型 scope | 从同团队历史缺陷 `tasks/info` 的 `issue_type_scope_uuid` 读（`<scope uuid>`，按实例从历史缺陷读取），写入 profile |
 | 工作项类型「缺陷」 type uuid | `6FUpniBf`（`issue_type_uuid`，区别于 `issue_type_scope_uuid`） |
 
 ## 字段映射（具体取值见 config/field-mapping.yaml，换项目只改配置）
@@ -103,11 +103,11 @@
 「系统环境」这类下拉需要**选项 UUID**，DOM 不直接暴露，用 `capture_field_options_fiber()` 一次捕获即可：
 
 1. `ones_helpers.open_defect_form(page, team_uuid, task_uuid, title)` 打开新建缺陷弹窗（自动选"缺陷"类型）；
-2. `ones_helpers.capture_field_options_fiber(page, "系统环境", "ousida")` —— 定位字段下拉、键入关键词，
+2. `ones_helpers.capture_field_options_fiber(page, "系统环境", "<环境关键词>")` —— 定位字段下拉、键入关键词，
    从虚拟列表 `List` fiber 的 `memoizedProps.data[].value` 取 uuid，显示名取可见 option 文本按序对齐，返回 `[{text, uuid}]`；
 3. 把 uuid 写入 `config/field-mapping.yaml` 的 profile（`system_env.option_uuid`），换项目只改配置。
 
-已验证：奥联 `t-aolian-奥联集成环境` = `SeMgos4c`；欧斯达 `t-ousida-瓯斯达集成测试（客户侧）` = `TAHbjMwv`。
+示例：`t-<关键词>-<环境名>` = `<8位uuid>`（换实例需重新捕获并写入 `system_env.option_uuid`）。
 
 ## 描述编辑器（CKEditor）
 

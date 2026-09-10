@@ -57,14 +57,14 @@ description: >-
 
 换新客户项目时，先做一次字段/选项发现，写入 `config/field-mapping.yaml` 的 profile；之后日常提缺陷只跑 CLI 即可，不再反向工程。
 
-**推荐一键接入**：`python scripts/ones_project_setup.py --work-order <工单URL> --profile <新项目名> [--env-keyword ousida] [--sample-defect <历史缺陷uuid>]`，
+**推荐一键接入**：`python scripts/ones_project_setup.py --work-order <工单URL> --profile <新项目名> [--env-keyword <环境关键词>] [--sample-defect <历史缺陷uuid>]`，
 自动完成下面 1~3 步并写入 profile（`--dry-run` 先看结果不落盘）。
 
 1. 打开一次新建缺陷弹窗（`open_defect_form`），用 `capture_field_options_fiber()` 捕获「系统环境 R3UqL3Vm」的选项 uuid。
 2. 用 `get_task_required_fields()` 从主工单取：来源项目、来源客户、功能模块、产品负责人、优先级、前端/后端人员 uuid。
 3. 缺陷工作项类型 `issue_type_scope_uuid`：从同团队任一历史缺陷 `tasks/info` 读（如 `M33Rzztq`），写入 profile 的 `issue_type_scope_uuid`。
 4. 严重程度是全局固定选项，提交默认「一般」；负责人/验证人 = 当前登录账号，运行期自动读取，均无需配置。
-5. 把以上写入 `config/field-mapping.yaml` 的新 profile（参考 `ousida` 段）。
+5. 把以上写入 `config/field-mapping.yaml` 的新 profile（参考已有 profile 段）。
 
 全局常量（严重程度 uuid、当前用户读取方式、scope 发现方法）见 `references/ones-ui.md`「全局常量表」。
 
@@ -83,7 +83,7 @@ description: >-
      **处理人选择规则（必读）**：
      - UI 展示/交互类缺陷（字段显示、字段带出、界面交互、样式）→ 提缺陷命令加 `--handler frontend`，处理人提前端人员；
      - 数据/逻辑/后端类缺陷 → 默认 `--handler backend`（或省略），处理人提后端人员。
-     例：`ones_submit_defects.py --profile aolian --bug-report <清单> --work-order <URL> --handler frontend`
+     例：`ones_submit_defects.py --profile <项目名> --bug-report <清单> --work-order <URL> --handler frontend`
      已建单需改处理人时，用 `ones_helpers` 调 `tasks/update` 改 `95jUV2Mb`（处理人字段）为目标人员 uuid。
    - UI 弹窗仅作兜底（弹窗/字段交互细节见 `references/ones-ui.md`；稳定版交互统一用 `ones_helpers.set_select_option / set_desc / upload_evidence / submit_defect`）：
    - 工单详情弹窗 → 页签"关联内容" → 按钮"新建关联工作项"。
@@ -142,3 +142,4 @@ description: >-
 - `scripts/ones_config.py`：配置加载（YAML → 环境变量 → 平台默认）。
 - `config/settings.yaml`：环境/浏览器配置；`config/field-mapping.yaml`：字段映射与证据目录索引。
 - `references/ones-ui.md`：选择器速查、字段映射、编辑器/上传/粘贴、缺陷单与主工单状态流转细节。
+- `../qa_skill_common/references/datagrip.md`：数据库只读核对（DataGrip 数据源发现 / 只读查询，公共文档）。

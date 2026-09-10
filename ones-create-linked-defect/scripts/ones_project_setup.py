@@ -3,7 +3,7 @@
 
 用法:
     python ones_project_setup.py --work-order <工单URL> --profile <新项目名> \\
-        [--env-keyword ousida] [--sample-defect <历史缺陷uuid>] [--site-url http://...] [--dry-run]
+        [--env-keyword <环境关键词>] [--sample-defect <历史缺陷uuid>] [--site-url http://...] [--dry-run]
 """
 import argparse
 import re
@@ -35,7 +35,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--work-order", required=True)
     ap.add_argument("--profile", required=True, help="field-mapping.yaml 里的新 profile 名")
-    ap.add_argument("--env-keyword", default="", help="系统环境搜索关键词（如 ousida），用于捕获系统环境 uuid")
+    ap.add_argument("--env-keyword", default="", help="系统环境搜索关键词（如 <环境关键词>），用于捕获系统环境 uuid")
     ap.add_argument("--sample-defect", default="", help="同团队任一历史缺陷 uuid，用于取 issue_type_scope_uuid")
     ap.add_argument("--site-url", default="", help="被测系统地址（可选）")
     ap.add_argument("--dry-run", action="store_true", help="只打印将写入的 profile，不落盘")

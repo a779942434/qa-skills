@@ -13,11 +13,21 @@
 """
 from __future__ import annotations
 
+import os
 import time
 
 from playwright.sync_api import Page
 
-DEFAULT_BASE = "http://dog.ob.shuyilink.com"
+# 站点不再写死：默认取环境变量 IPC_BASE_URL，留空时调用方必须显式传 base_url
+DEFAULT_BASE = os.environ.get("IPC_BASE_URL", "").rstrip("/")
+
+
+def _require_base(base_url):
+    if not base_url:
+        raise RuntimeError(
+            "未配置 IPC 站点：请设置环境变量 IPC_BASE_URL，或调用时传入 base_url='http://<host>'"
+        )
+    return base_url
 
 
 def _frame_with_text(page: Page, text: str, exact: bool = True):
@@ -77,6 +87,7 @@ def unlock_ipc(page: Page, system_password: str = "123456", base_url: str = DEFA
 
     解锁密码按用户提供；未提供时默认测试环境通用密码 "123456"。
     """
+    base_url = _require_base(base_url)
     if "/ipc/setting" not in page.url:
         page.goto(base_url + "/ipc/setting", wait_until="domcontentloaded", timeout=60000)
     page.wait_for_timeout(6000)
@@ -127,6 +138,7 @@ def enter_ipc_feature(page: Page, feature: str, base_url: str = DEFAULT_BASE):
         "产线界面": "/ipc/line",
     }.get(feature)
 
+    base_url = _require_base(base_url)
     if "/ipc" not in page.url or "/setting" in page.url:
         page.goto(base_url + "/ipc", wait_until="domcontentloaded", timeout=60000)
     page.wait_for_timeout(8000)

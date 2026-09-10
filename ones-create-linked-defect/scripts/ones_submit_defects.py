@@ -2,7 +2,7 @@
 """ONES 一键提缺陷 CLI（整合字段缓存 + 登录账号 + 默认严重程度 + 页面复用）。
 
 用法:
-    python scripts/ones_submit_defects.py --bug-report <缺陷清单.md> --work-order <工单URL> --profile ousida
+    python scripts/ones_submit_defects.py --bug-report <缺陷清单.md> --work-order <工单URL> --profile <项目名>
 
 优化点:
     - 只用 get_task_required_fields() 提取建缺陷必填字段，不搬运完整描述；
@@ -225,7 +225,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bug-report", required=True, help="缺陷清单 md 路径")
     ap.add_argument("--work-order", required=True, help="ONES 工单 URL")
-    ap.add_argument("--profile", default=None, help="field-mapping.yaml 项目段名（如 ousida）")
+    ap.add_argument("--profile", default=None, help="field-mapping.yaml 项目段名（如 <项目名>）")
     ap.add_argument("--sample-defect", default=None, help="可选：字段模板缺陷 uuid")
     ap.add_argument("--only", action="append", default=[], help="只提交指定编号，可重复")
     ap.add_argument("--bugs", default="", help="逗号分隔编号，支持数字简写")

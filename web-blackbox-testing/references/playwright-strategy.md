@@ -170,7 +170,7 @@ assert_page_state(...)
 > 定位：与「Python Playwright 脚本」并列的第二种连接方式，只解决「复用真窗口已登录态」这一场景；
 > 判定/纪律类原则仍以 SKILL.md 必守清单为准，此处只写安装、配置与使用钩子。
 
-适用场景：被测系统在**日常 Chrome 默认 profile 里已登录**（如 t-dafu / t-ousida），希望 AI 直接操控真实窗口、
+适用场景：被测系统在**日常 Chrome 默认 profile 里已登录**（如已登录的测试站点），希望 AI 直接操控真实窗口、
 复用登录态做黑盒，最贴近真实用户操作。
 
 - 本体：微软官方 `@playwright/mcp`，Codex 侧配置已写入 `~/.codex/config.toml`：

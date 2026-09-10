@@ -71,7 +71,7 @@ for d in "${SYNC_DIRS[@]}"; do
         PURGE_OPTS+=(--exclude 'scripts/config')
         ;;
       ones-create-linked-defect)
-        PURGE_OPTS+=(--exclude 'config/field-mapping.local.yaml' --exclude 'bug-reports' --exclude 'test-reports')
+        PURGE_OPTS+=(--exclude 'scripts/config' --exclude 'config/field-mapping.local.yaml' --exclude 'bug-reports' --exclude 'test-reports')
         ;;
     esac
     rsync "${PURGE_OPTS[@]}" "$REPO_DIR/${d}/" "$CODEX_SKILLS_DIR/${d}/"

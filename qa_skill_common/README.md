@@ -13,11 +13,11 @@
 
 ## 环境配置（站点/账号不再写死）
 
-`bbt_osd_common` 不再把目标环境写死为 t-ousida，全部改为环境变量配置（留空即未配置，调用时会报明确提示）：
+`bbt_osd_common` 不再把目标环境写死为具体站点，全部改为环境变量配置（留空即未配置，调用时会报明确提示）：
 
 | 环境变量 | 含义 | 示例 |
 | --- | --- | --- |
-| `MES_URL` | 被测 MES 站点根地址 | `http://t-dafu.ob.shuyilink.com` |
+| `MES_URL` | 被测 MES 站点根地址 | `http://<你的测试站点>` |
 | `MES_ACCOUNT` | Keycloak 登录账号 | `admin` |
 | `MES_PASSWORD` | Keycloak 登录密码 | 依环境而定 |
 

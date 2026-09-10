@@ -14,7 +14,7 @@ python recon_dropdown.py --url <页面URL> --button 新增         # dump 弹窗
 python recon_subtables.py --url <页面URL> --max-rows 5        # 点击每行主表行，dump 出现的子表
 ```
 
-登录与环境：不再写死 t-ousida。登录会自动按 `--url` 所在站点走 Keycloak；账号密码可用环境变量覆盖：
+登录与环境：不再写死具体站点。登录会自动按 `--url` 所在站点走 Keycloak；账号密码可用环境变量覆盖：
 - `MES_URL`：被测站点根地址（未设置时自动取 `--url` 的根地址）
 - `MES_ACCOUNT` / `MES_PASSWORD`：登录账号/密码（未设置会报明确提示）
 （兼容入口 `login_ousida` 名称保留，行为已环境无关化。）

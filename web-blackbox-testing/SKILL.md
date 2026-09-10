@@ -29,7 +29,7 @@ description: >-
 
 > 执行中每一步都对照下面底线，详细规则见本文后续各节与 `references/`。**不匹配即停、只做标准操作、侦察不重复** 三条是踩坑最多的底线。
 
-1. **环境勘察先行**：先确认本机浏览器（优先系统 Chrome/Edge，**禁止 `playwright install` / 下载浏览器**）、playwright 可用性、目标站点连通；目标站点与 skill 固化站点（如 t-ousida）不同时，先验证登录/SSO 是否互通，不自作假设。
+1. **环境勘察先行**：先确认本机浏览器（优先系统 Chrome/Edge，**禁止 `playwright install` / 下载浏览器**）、playwright 可用性、目标站点连通；目标站点与 skill 固化站点（如示例站点）不同时，先验证登录/SSO 是否互通，不自作假设。
 2. **只复用固化脚本**：登录/导航/下拉用 `qa_skill_common`（`login_for_page` / `login_ousida` / `goto`，环境无关，站点取 `MES_URL` 或 `--url`）；新页面侦察用 `recon-generic/recon_page.py --url <URL>`；造数用 `bbt_osd_setup.py`；提缺陷用 `ones_submit_defects.py --work-order <URL>`。**禁止自写平行替代脚本。**
 3. **不匹配即停**：固化工具与目标环境不匹配（域名/URL/登录/浏览器/组件结构不同）时，先停下用 ≤5 行说明「差异 + 最小适配方案（优先复用同一函数传参/环境变量）」，**等用户确认后再动手**，不得静默绕过。
 4. **侦察纪律**：同一页面侦察 ≤2 次，结果固化进 references 后直接引用；不重复 dump，不输出大段 DOM/表格/body 文本，日志只给结论/关键断言/截图文件名。
@@ -39,7 +39,7 @@ description: >-
 8. **结束闸门**：**测试环境保留造数为预期**，仅当确需清理时才清理并留痕；须记录本轮产生数据（单据编号/扣减量）并在报告/缺陷清单注明。`record_baseline/assert_new_target` 仅用于防误动历史数据。证据截图归档到 `bug-reports/<功能>/`，缺陷清单「证据」只写纯文件名；用 `ones_submit_defects.py` 提缺陷，缺主工单 URL 先问用户、**不许跳过**；报告/缺陷/用例归档到 `knowledge-base/` 对应目录。
 ## 新站点适配侦察定式（2026-09-07 增补）
 
-> 适用：目标站点/组件库与固化站点（t-ousida 等 Element UI）不同（如自研 sy-*/div-table 组件、
+> 适用：目标站点/组件库与固化站点（示例 Element UI 站点）不同（如自研 sy-*/div-table 组件、
 > 登录非 Keycloak、内容在 iframe/弹层）。此时固定选择器（.el-table__row 等）与固化登录不适用，
 > 按下面定式一次摸清，避免“侦察→试操作→失败→再侦察”循环：
 
@@ -265,7 +265,7 @@ description: >-
 
 ## 数据库与接口辅助
 
-需要数据查验、页面 vs 数据库 / 接口一致性核对时，先读 `references/datagrip.md`。
+需要数据查验、页面 vs 数据库 / 接口一致性核对时，先读 `../qa_skill_common/references/datagrip.md`（公共文档，单一来源）。
 只做用户授权范围内的只读查询；凭据按环境变量 → 本机凭据 → DataGrip 配置的顺序取。
 
 ## 缺陷记录、报告与归档

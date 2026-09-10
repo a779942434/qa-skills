@@ -10,8 +10,8 @@ from urllib.parse import urlsplit
 from playwright.sync_api import sync_playwright
 from .bbt_helpers import wait_text, wait_button, wait_toast
 
-# 目标站点与账号不再写死（如 t-ousida/t-dafu），全部通过环境变量指定，留空即未配置：
-#   MES_URL       被测 MES 站点根地址，如 http://t-dafu.ob.shuyilink.com
+# 目标站点与账号不再写死具体站点，全部通过环境变量指定，留空即未配置：
+#   MES_URL       被测 MES 站点根地址，如 http://<你的测试站点>
 #   MES_ACCOUNT   Keycloak 登录账号
 #   MES_PASSWORD  Keycloak 登录密码
 URL = os.environ.get("MES_URL", "").rstrip("/")
@@ -40,7 +40,7 @@ __all__ = [
 
 
 def login_ousida(page, base_url=None):
-    """在目标 MES 站点完成 Keycloak 登录（环境无关，不再写死 t-ousida）。
+    """在目标 MES 站点完成 Keycloak 登录（环境无关，不再写死具体站点）。
 
     目标地址取 base_url 参数；未传时取环境变量 MES_URL。
     账号密码取环境变量 MES_ACCOUNT / MES_PASSWORD；未配置时抛出明确提示。

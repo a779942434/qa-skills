@@ -250,8 +250,8 @@ def get_parent_handlers(page, team_uuid, task_uuid):
     """从主工单字段获取 (前端人员 uuid, 后端人员 uuid)。
 
     字段约定（当前 ONES 配置）：
-        PAefcDE8 = 前端人员（如 王斌 JGwXEzXq）
-        YBszpWb3 = 后端人员（如 安杰 1vmJxxsw）
+        PAefcDE8 = 前端人员（取主工单前端人员 uuid）
+        YBszpWb3 = 后端人员（取主工单后端人员 uuid）
     处理人规则：UI 前端类 bug 指向前端人员，其余类 bug 指向后端人员。
     """
     req = get_task_required_fields(page, team_uuid, task_uuid)
@@ -562,7 +562,7 @@ def capture_field_options(page, label, keyword, expect=None, timeout=10):
 
     用法（混合模式）：
         1. open_defect_form(...) 打开弹窗；
-        2. capture_field_options(page, "系统环境", "奥联", "t-aolian") 拿到 uuid；
+        2. capture_field_options(page, "系统环境", "<关键词>", "t-<关键词>") 拿到 uuid；
         3. 写入 config/field-mapping.yaml 缓存，之后全部走 create_linked_defect API。
     """
     hits = []
