@@ -21,7 +21,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_SKILLS_DIR="${CODEX_SKILLS_DIR:-$HOME/.codex/skills}"
 
 # 仓库中需要同步到 Codex 的技能/公共包目录（按需增删）
-SYNC_DIRS=(web-blackbox-testing qa_skill_common ones-create-linked-defect generate-manufacturing-test-cases generate-arun-api-scripts)
+SYNC_DIRS=(web-blackbox-testing ones-create-linked-defect generate-manufacturing-test-cases generate-arun-api-scripts)
 
 DRY_RUN=0
 PURGE=0
@@ -53,6 +53,15 @@ echo "模式:       $MODE"
 echo
 
 mkdir -p "$CODEX_SKILLS_DIR"
+
+# 先把公共实现内置到各技能，保证每个技能单目录安装也能运行
+if [ "$DRY_RUN" -eq 1 ]; then
+  "$REPO_DIR/vendor-common.sh" --check \
+    || echo "  [警告] 内置副本与 qa_skill_common/ 不一致；正式同步会自动重建"
+else
+  "$REPO_DIR/vendor-common.sh"
+fi
+echo
 
 RSYNC_OPTS=(-av --exclude '.DS_Store' --exclude '.git')
 [ "$DRY_RUN" -eq 1 ] && RSYNC_OPTS+=(-n)
@@ -92,11 +101,8 @@ for d in "${SYNC_DIRS[@]}"; do
     echo "  [缺失] ${d}"
     continue
   fi
-  # qa_skill_common 是公共实现包，无 SKILL.md 属正常
   if [ -f "$CODEX_SKILLS_DIR/${d}/SKILL.md" ]; then
     echo "  [OK] ${d}/SKILL.md"
-  elif [ "${d}" = "qa_skill_common" ]; then
-    echo "  [OK] ${d}（公共实现包，无 SKILL.md 属正常）"
   else
     echo "  [警告] ${d} 缺少 SKILL.md"
   fi

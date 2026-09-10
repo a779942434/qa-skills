@@ -14,6 +14,8 @@ description: >-
 
 # ONES 缺陷全流程（创建 / 回归后处理 / 主工单流转）
 
+> 本技能自带公共实现（`scripts/qa_skill_common/`），**可独立安装**，无需同级 `qa_skill_common`；公共实现由仓库根 `vendor-common.sh` 统一生成。
+
 ## 概述
 
 在 ONES 项目管理中，把本地 `bug-reports/` 缺陷清单的缺陷登记为工单的关联缺陷工作项，
@@ -142,4 +144,4 @@ description: >-
 - `scripts/ones_config.py`：配置加载（YAML → 环境变量 → 平台默认）。
 - `config/settings.yaml`：环境/浏览器配置；`config/field-mapping.yaml`：字段映射与证据目录索引。
 - `references/ones-ui.md`：选择器速查、字段映射、编辑器/上传/粘贴、缺陷单与主工单状态流转细节。
-- `../qa_skill_common/references/datagrip.md`：数据库只读核对（DataGrip 数据源发现 / 只读查询，公共文档）。
+- `scripts/qa_skill_common/references/datagrip.md`：数据库只读核对（DataGrip 数据源发现 / 只读查询，随技能内置）。

@@ -1,6 +1,9 @@
 # qa_skill_common
 
-本目录是 `web-blackbox-testing` 与 `ones-create-linked-defect` 的**唯一公共实现源**。它集中维护 MES 测试所需的登录、导航、页面侦察、错误监听、数据基线与造数逻辑，避免同一逻辑在两个技能目录中复制后发生漂移。
+本目录是 `web-blackbox-testing` 与 `ones-create-linked-defect` 的**唯一公共实现源**（开发侧维护，不单独分发）。集中维护 MES 测试所需的登录、导航、页面侦察、错误监听、数据基线与造数逻辑。
+
+> 各技能要求**可独立安装**，因此本包会被内置到每个技能内（`<技能>/scripts/qa_skill_common/`），由仓库根的 `vendor-common.sh` 生成、`--check` 防漂移。
+> 修改公共实现时只改本目录，然后运行 `./vendor-common.sh` 重新生成；**不要直接改各技能内的副本**。
 
 ## 目录职责
 

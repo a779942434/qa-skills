@@ -10,6 +10,8 @@ description: >-
 ---
 
 # Web 黑盒测试
+
+> 本技能自带公共实现（`scripts/qa_skill_common/`），**可独立安装**，无需同级 `qa_skill_common`；公共实现由仓库根 `vendor-common.sh` 统一生成。
 ## 开工速查（2026-09-07 增补，先读这一节再往下，防重复踩坑）
 
 > 这些规则对应历史上反复出现的耗时/误报点，均已固化到下文对应章节与 qa_skill_common：
@@ -265,7 +267,7 @@ description: >-
 
 ## 数据库与接口辅助
 
-需要数据查验、页面 vs 数据库 / 接口一致性核对时，先读 `../qa_skill_common/references/datagrip.md`（公共文档，单一来源）。
+需要数据查验、页面 vs 数据库 / 接口一致性核对时，先读 `scripts/qa_skill_common/references/datagrip.md`（随技能内置）。
 只做用户授权范围内的只读查询；凭据按环境变量 → 本机凭据 → DataGrip 配置的顺序取。
 
 ## 缺陷记录、报告与归档
