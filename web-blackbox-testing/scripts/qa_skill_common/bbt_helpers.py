@@ -11,6 +11,7 @@
 用法示例见 web-blackbox-testing.md。
 """
 import os
+import re
 import shutil
 import sys
 import time
@@ -28,6 +29,10 @@ __all__ = [
     "detect_cascade", "select_cascade", "click_or_observe", "reset_to",
     # 2026-09-07 无视觉/盲操作辅助
     "click_visible_text", "open_split_add_dropdown", "dump_visible_dialogs",
+    # 2026-09-10 Element Plus 表单/表格交互配方（真实流程踩坑固化）
+    "form_item", "open_select", "select_options", "select_option",
+    "select_value", "selected_count", "select_is_multiple", "table_col",
+    "open_dropdown_menu", "click_dropdown_item",
 ]
 
 
@@ -760,6 +765,136 @@ def click_visible_text(page, text):
         return {"ok": False, "why": repr(e)[:120]}
 
 
+# ---------------------------------------------------------------------------
+# Element Plus 表单/表格交互配方（2026-09-10 增补）
+# 固化真实流程反复踩的坑：隐藏输入、下拉需真实点击且 teleport 到 body、
+# 单选/多选读值不同、表格首个 th 是复选框（列索引偏移）、Escape 会关整个弹窗。
+# 详见 references/element-plus-recipe.md
+# ---------------------------------------------------------------------------
+
+def form_item(page, label, scope="body"):
+    """按标签精确定位表单项（返回 .el-form-item 的 Locator，取首个匹配）。
+
+    - label 精确匹配，避免「产品」命中「产品系列」；
+    - 筛选区与弹窗里同名字段时用 scope 限定，如 scope="[role=dialog]"。
+    """
+    return page.locator(
+        f"{scope} .el-form-item:has(.el-form-item__label:text-is('{label}'))"
+    ).first
+
+
+def open_select(page, item):
+    """展开表单项里的下拉（真实点击，自动等待 teleport 到 body 的下拉）。
+
+    注意：Element Plus 下拉用 JS 直接 click() 往往不展开，必须 Playwright 真实点击。
+    """
+    for _ in range(3):
+        if page.locator(".el-select-dropdown:visible").count():
+            return True
+        item.locator(".el-select").first.click(force=True)
+        page.wait_for_timeout(1000)
+    return page.locator(".el-select-dropdown:visible").count() > 0
+
+
+def select_options(page):
+    """返回当前可见下拉的选项文本（去重保序）。"""
+    return list(dict.fromkeys(
+        t.strip() for t in page.locator(".el-select-dropdown__item:visible").all_inner_texts() if t.strip()
+    ))
+
+
+def select_option(page, item, value):
+    """在表单项下拉里选择包含 value 的选项（自动展开）。返回 bool。"""
+    if not open_select(page, item):
+        return False
+    page.locator(".el-select-dropdown__item:visible").filter(has_text=value).first.click()
+    page.wait_for_timeout(600)
+    return True
+
+
+def select_value(item):
+    """读表单项下拉当前显示值（Element Plus 把值渲染在 .el-select__selected-item，不在 input.value）。"""
+    for sel in (".el-select__selected-item", ".el-select__placeholder"):
+        loc = item.locator(sel)
+        if loc.count():
+            v = (loc.first.inner_text() or "").strip()
+            if v:
+                return v
+    inp = item.locator("input")
+    return (inp.first.input_value() or "").strip() if inp.count() else ""
+
+
+def selected_count(item):
+    """表单项下拉当前已选数量（多选会把多余项折叠成「+N」，一并计入）。"""
+    tags = [t.strip() for t in item.locator(".el-tag").all_inner_texts() if t.strip()]
+    n = 0
+    for t in tags:
+        m = re.match(r"^\+\s*(\d+)$", t)
+        n += int(m.group(1)) if m else 1
+    if n:
+        return n
+    v = select_value(item)
+    return 1 if v and v not in ("请选择", "全部") else 0
+
+
+def select_is_multiple(page, item, values):
+    """行为判定下拉是否多选：依次选中 values，最终仍 ≥2 项即为多选。
+
+    不要靠 DOM 猜（空的多选没有 el-tag，会误判）。
+    """
+    for v in values:
+        select_option(page, item, v)
+        if not page.locator(".el-select-dropdown:visible").count():
+            open_select(page, item)
+    # 注意：不要按 Escape —— 下拉已收起时 Escape 会关掉整个弹窗
+    return selected_count(item) >= 2
+
+
+def table_col(page, header, table_index=0):
+    """按表头名读取整列文本（自动处理「首个 th 是复选框（空表头）」造成的列偏移）。"""
+    table = page.locator(".el-table").nth(table_index)
+    ths = [table.locator("th").nth(i).inner_text().strip() for i in range(table.locator("th").count())]
+    if header not in ths:
+        return []
+    idx = ths.index(header) + 1  # nth-child 从 1 开始
+    return [v.strip() for v in table.locator(f".el-table__row td:nth-child({idx})").all_inner_texts() if v.strip()]
+
+
+def open_dropdown_menu(page, near_text="新增"):
+    """展开「按钮▾」分体下拉（兼容 Element Plus el-button-group 与 sy 组件），返回可见菜单项文本。"""
+    # Element Plus：button-group 里的 caret 按钮
+    caret = page.locator(".el-button-group .el-dropdown__caret-button")
+    if caret.count():
+        try:
+            caret.first.click(force=True)
+            page.wait_for_timeout(1200)
+        except Exception:
+            pass
+    if not page.locator(".el-dropdown-menu__item:visible").count():
+        # 兜底：点与 near_text 同一按钮组的下拉触发器
+        try:
+            grp = page.locator(".el-button-group").filter(
+                has=page.locator(f"button:has-text('{near_text}')")).first
+            if grp.count():
+                grp.locator(".el-dropdown__caret-button, .el-dropdown__icon").first.click(force=True)
+                page.wait_for_timeout(1200)
+        except Exception:
+            pass
+    return list(dict.fromkeys(
+        t.strip() for t in page.locator(".el-dropdown-menu__item:visible").all_inner_texts() if t.strip()
+    ))
+
+
+def click_dropdown_item(page, text):
+    """点击当前可见下拉里的指定项。返回 bool。"""
+    loc = page.locator(".el-dropdown-menu__item:visible").filter(has_text=text).first
+    if not loc.count():
+        return False
+    loc.click()
+    page.wait_for_timeout(1500)
+    return True
+
+
 def open_split_add_dropdown(page, entry_selector=".add-dropdown-btns-entry"):
     """展开「新增▾」式分体按钮的下拉并点击首项（如子表「导入 Excel」入口）。
 
@@ -770,6 +905,15 @@ def open_split_add_dropdown(page, entry_selector=".add-dropdown-btns-entry"):
 
     返回 bool（是否成功点开下拉首项）。
     """
+    # 先兼容 Element Plus 的「新增▾」分体按钮（el-button-group + caret）
+    try:
+        items = open_dropdown_menu(page)
+        if items:
+            page.locator(".el-dropdown-menu__item:visible").first.click()
+            page.wait_for_timeout(2500)
+            return True
+    except Exception:
+        pass
     try:
         entry = page.locator(entry_selector).first
         if entry.count() == 0:

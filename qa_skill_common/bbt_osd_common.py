@@ -36,6 +36,7 @@ __all__ = [
     "click_nth_add", "confirm_msgbox", "toast_texts", "read_table_by_header",
     "find_row", "open_product_series", "ensure_product", "ensure_craft",
     "ensure_proc", "ensure_bom",
+    "goto_feature",
 ]
 
 
@@ -70,6 +71,44 @@ def base_url_for(target_url):
 def login_for_page(page, target_url):
     """登录目标页面所在的 MES 站点：优先 MES_URL，未配置则取 target_url 的根地址。"""
     login_ousida(page, base_url=(URL or base_url_for(target_url)))
+
+
+def goto_feature(page, name, base_url=None, wait_ms=8000):
+    """用首页「搜索功能」按功能名直达目标页面，返回落地 URL（失败返回 None）。
+
+    背景：新功能入口靠菜单逐级点很费时；首页搜索框可直达，但 fill 常常不触发过滤，
+    必须 click → 逐字 type。本函数固化该流程（真实流程踩坑，2026-09-10）。
+    """
+    base = (base_url or URL or "").rstrip("/")
+    if not base:
+        import urllib.parse as _u
+        parts = _u.urlsplit(page.url)
+        base = f"{parts.scheme}://{parts.netloc}"
+    if not base:
+        raise RuntimeError("无法确定站点根地址：请设置 MES_URL 或传 base_url")
+    page.goto(base + "/home", wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_timeout(wait_ms)
+
+    box = page.locator("input[placeholder*='搜索功能']").first
+    if box.count() == 0:
+        return None
+    box.click(force=True)
+    page.wait_for_timeout(600)
+    page.keyboard.type(name, delay=150)          # 逐字输入才会触发过滤
+    page.wait_for_timeout(3000)
+
+    # 优先点下拉结果，其次点页面里包含该名称的可见文本
+    hit = page.locator(".el-dropdown-menu__item:visible, .el-select-dropdown__item:visible").filter(has_text=name).first
+    if not hit.count():
+        hit = page.get_by_text(name, exact=False).first
+    if not hit.count():
+        return None
+    try:
+        hit.click(timeout=6000)
+    except Exception:
+        return None
+    page.wait_for_timeout(wait_ms)
+    return page.url
 
 
 def goto(page, url):

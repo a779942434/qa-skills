@@ -62,6 +62,7 @@ SETS = {
         "web-blackbox-testing/references/reporting.md",
         "qa_skill_common/references/environment.md",
         "qa_skill_common/references/bug-report.md",
+        "qa_skill_common/references/element-plus-recipe.md",
         "qa_skill_common/references/datagrip.md",
     ],
 }

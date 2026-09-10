@@ -162,6 +162,8 @@ description: >-
 
 ## Playwright 使用策略
 
+**Element Plus 表单/下拉/表格交互配方**（7 个高频坑 + 直接可用的 helper：`form_item` / `open_select` / `select_option` / `select_value` / `select_is_multiple` / `table_col` / `open_dropdown_menu` / `goto_feature`）见 [scripts/qa_skill_common/references/element-plus-recipe.md](scripts/qa_skill_common/references/element-plus-recipe.md)（**做 UI 用例前先看**）。
+
 详见 [references/playwright-strategy.md](references/playwright-strategy.md)（多信号判定、接口观测等待、失败分级、脚本与执行约定）；级联/树选择、Playwright MCP 真窗口、新站点适配定式见 [references/advanced-ui.md](references/advanced-ui.md)（按需）。三条最常用：
 
 - 复用已有页面，不重复多开。
