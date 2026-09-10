@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from qa_skill_common import bug_report_schema as bug_schema  # noqa: E402
 from qa_skill_common import paths as qa_paths  # noqa: E402
+from qa_skill_common.bbt_helpers import wait_app_ready
 from ones_config import load_field_mapping  # noqa: E402
 from ones_helpers import (  # noqa: E402
     DEFAULT_SEVERITY,
@@ -167,7 +168,7 @@ def attach_evidence(page, team_uuid, defect_uuid, files):
     from ones_helpers import resolve_settings
     base = resolve_settings()["ones_url"].rstrip("/")
     page.goto(f"{base}/project/#/team/{team_uuid}/task/{defect_uuid}", wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(7000)
+    wait_app_ready(page)                                   # 替代固定 7s
     page.evaluate(
         """() => {
             let target = null;
@@ -185,7 +186,10 @@ def attach_evidence(page, team_uuid, defect_uuid, files):
             return true;
         }"""
     )
-    page.wait_for_timeout(3000)
+    try:
+        page.wait_for_selector("input.upload-input", timeout=5000)   # 替代固定 3s
+    except Exception:
+        pass
     up = page.locator("input.upload-input")
     if up.count() == 0:
         return False, "未找到上传控件"

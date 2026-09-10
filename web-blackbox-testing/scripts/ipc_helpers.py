@@ -14,9 +14,14 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
+from pathlib import Path
 
 from playwright.sync_api import Page
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bbt_helpers import wait_any, wait_gone  # noqa: E402
 
 # 站点不再写死：默认取环境变量 IPC_BASE_URL，留空时调用方必须显式传 base_url
 DEFAULT_BASE = os.environ.get("IPC_BASE_URL", "").rstrip("/")
@@ -66,6 +71,20 @@ def _wait_for_button_frame(page: Page, text: str, timeout: int = 20):
     return page
 
 
+def _wait_for_text_frame(page: Page, text: str, timeout: int = 12):
+    """轮询等待包含指定文本的 frame（替代固定 sleep）。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for frame in page.frames:
+            try:
+                if frame.get_by_text(text, exact=False).count() > 0:
+                    return frame
+            except Exception:
+                continue
+        page.wait_for_timeout(400)
+    return page
+
+
 def _click_first_visible(locator, timeout: int = 5000):
     """逐个尝试可见元素；全部不可见则尝试第一个。返回是否已点击。"""
     for i in range(locator.count()):
@@ -90,7 +109,7 @@ def unlock_ipc(page: Page, system_password: str = "123456", base_url: str = DEFA
     base_url = _require_base(base_url)
     if "/ipc/setting" not in page.url:
         page.goto(base_url + "/ipc/setting", wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(6000)
+        wait_gone(page, ".el-loading-mask", timeout=8)   # 替代固定 6s
 
     frame = _wait_for_button_frame(page, "解锁")
     password = frame.locator("input[type=password]")
@@ -98,7 +117,8 @@ def unlock_ipc(page: Page, system_password: str = "123456", base_url: str = DEFA
         password.first.fill(system_password)
     unlock = frame.locator("button:has-text('解锁')")
     unlock.first.click(timeout=5000)
-    page.wait_for_timeout(3000)
+    # 等解锁后的设置界面出现（替代固定 3s）
+    _wait_for_text_frame(page, "请选择站点", timeout=10)
     return frame
 
 
@@ -107,16 +127,16 @@ def select_station_and_save(page: Page, station: str):
     frame = _frame_with_button(page, "解锁")
     trigger = frame.get_by_text("请选择站点", exact=False).first
     trigger.click(timeout=5000)
-    page.wait_for_timeout(1800)
+    wait_any(frame, ".el-select-dropdown__item:visible, .el-popper:visible, li:visible", timeout=5)
 
     option = frame.get_by_text(station, exact=True)
     _click_first_visible(option)
-    page.wait_for_timeout(1800)
+    wait_gone(frame, ".el-select-dropdown:visible", timeout=4)
 
     save = frame.locator("button:has-text('保存配置')")
     if save.count():
         save.first.click(timeout=5000)
-    page.wait_for_timeout(2500)
+    wait_any(page, ".el-message-box:visible, .el-message:visible", timeout=4)
 
     # 确认提示不是标准 button，用文本定位并 force click。
     for f in page.frames:
@@ -127,7 +147,9 @@ def select_station_and_save(page: Page, station: str):
                 break
             except Exception:
                 continue
-    page.wait_for_timeout(8000)
+    # 等确认框消失（替代固定 8s）
+    wait_gone(page, ".el-message-box", timeout=15)
+    wait_gone(page, ".el-loading-mask", timeout=10)
     return frame
 
 
@@ -141,9 +163,7 @@ def enter_ipc_feature(page: Page, feature: str, base_url: str = DEFAULT_BASE):
     base_url = _require_base(base_url)
     if "/ipc" not in page.url or "/setting" in page.url:
         page.goto(base_url + "/ipc", wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(8000)
-
-    frame = _frame_with_text(page, feature)
+    frame = _wait_for_text_frame(page, feature, timeout=15)   # 替代固定 8s
     entry = frame.get_by_text(feature, exact=True)
     _click_first_visible(entry)
 
@@ -151,9 +171,9 @@ def enter_ipc_feature(page: Page, feature: str, base_url: str = DEFAULT_BASE):
         try:
             page.wait_for_url(f"**{expected}**", timeout=15000)
         except Exception:
-            page.wait_for_timeout(5000)
+            wait_gone(page, ".el-loading-mask", timeout=8)
     else:
-        page.wait_for_timeout(5000)
+        wait_gone(page, ".el-loading-mask", timeout=8)
     return frame
 
 
@@ -195,7 +215,7 @@ def open_handover_dialog(page: Page):
     frame = _frame_with_text(page, "交接班")
     entry = frame.get_by_text("交接班", exact=True)
     _click_first_visible(entry)
-    page.wait_for_timeout(4000)
+    _wait_for_text_frame(page, "打卡信息", timeout=10)   # 替代固定 4s
     return _frame_with_text(page, "打卡信息")
 
 

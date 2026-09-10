@@ -8,3 +8,4 @@ node_modules/
 /ones-create-linked-defect/config/field-mapping.local.yaml
 .idea/
 /runs/
+/.cache/

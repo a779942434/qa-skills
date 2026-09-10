@@ -8,6 +8,7 @@ import json
 from playwright.sync_api import sync_playwright
 
 from ..bbt_osd_common import goto, login_for_page
+from ..bbt_helpers import wait_dialog_open
 from ..bbt_helpers import launch_mes_browser
 
 
@@ -23,7 +24,7 @@ def main():
             login_for_page(page, args.url)
             goto(page, args.url)
             page.locator(f"button:has-text('{args.button}')").first.click()
-            page.wait_for_timeout(1800)
+            wait_dialog_open(page, timeout=8)          # 替代固定 1.8s
             page.locator(".el-dialog .el-select__wrapper").first.click()
             page.wait_for_timeout(800)
             opts = page.locator(".el-select-dropdown__item:visible").all_inner_texts()

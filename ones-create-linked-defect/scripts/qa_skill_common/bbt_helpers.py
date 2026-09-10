@@ -33,6 +33,9 @@ __all__ = [
     "form_item", "open_select", "select_options", "select_option",
     "select_value", "selected_count", "select_is_multiple", "table_col",
     "open_dropdown_menu", "click_dropdown_item",
+    # 2026-09-10 条件等待（替代固定 sleep，提速）
+    "wait_any", "wait_gone", "wait_app_ready",
+    "wait_dialog_open", "wait_dialog_closed", "wait_table_ready",
 ]
 
 
@@ -211,6 +214,67 @@ def error_report(watchers):
 
 
 # ---------- 2. 条件等待 ----------
+
+APP_READY_SELECTORS = (".el-menu, .el-container, .el-table, .el-form, .el-button, "
+                       "#root, #app, .ones-dialog, .task-item, [class*=ones-]")
+
+
+def wait_any(page, selector, timeout=15, state="visible"):
+    """等任一选择器命中（逗号分隔=OR）。命中返回 True，超时返回 False。
+
+    用于替代「先睡 N 秒再赌页面渲染完」——有就立刻过，没有才等到超时。
+    """
+    try:
+        page.wait_for_selector(selector, state=state, timeout=int(timeout * 1000))
+        return True
+    except Exception:
+        return False
+
+
+def wait_gone(page, selector, timeout=10):
+    """等元素消失/不存在（如 loading 遮罩）。超时返回 False。"""
+    try:
+        page.wait_for_selector(selector, state="hidden", timeout=int(timeout * 1000))
+        return True
+    except Exception:
+        return False
+
+
+def wait_dialog_open(page, timeout=8):
+    """等可见弹窗出现（替代点「新增/编辑」后的固定 sleep）。"""
+    return wait_any(page, "[role=dialog]:visible, .el-dialog:visible, .el-message-box:visible", timeout=timeout)
+
+
+def wait_dialog_closed(page, timeout=8):
+    """等弹窗全部关闭（替代点「确定/取消」后的固定 sleep）。"""
+    return wait_gone(page, "[role=dialog]:visible, .el-dialog:visible, .el-message-box:visible", timeout=timeout)
+
+
+def wait_table_ready(page, timeout=15, min_rows=1):
+    """等表格就绪：loading 遮罩消失 + 至少出现 min_rows 行（保守：超时也返回）。"""
+    wait_gone(page, ".el-loading-mask", timeout=timeout)
+    if min_rows > 0:
+        try:
+            page.wait_for_selector(".el-table__row", timeout=3000)
+        except Exception:
+            pass
+    return True
+
+
+def wait_app_ready(page, timeout=12, settle=3, networkidle_ms=1200, selector=None):
+    """等应用首屏就绪：出现内容元素 → loading 遮罩消失 → 短暂等网络静默。
+
+    替代 goto/login 后的固定 sleep。networkidle 只给很短上限：
+    SPA 常有轮询，等久了必然白等到超时。
+    """
+    wait_any(page, selector or APP_READY_SELECTORS, timeout=timeout)
+    wait_gone(page, ".el-loading-mask", timeout=settle)
+    try:
+        page.wait_for_load_state("networkidle", timeout=networkidle_ms)
+    except Exception:
+        pass
+    return True
+
 
 def wait_visible(page, selector, timeout=15, interval=0.5):
     """元素可见即返回 True；超时返回 False（不抛异常）。替代固定 sleep。"""
@@ -674,7 +738,7 @@ def select_cascade(page, trigger_sel, leaf_part, diag=None, input_sel=None):
         if leaf.count() == 0:
             return ("fail", "未找到叶节点[%s]" % leaf_part)
         leaf.click(timeout=4000)
-        page.wait_for_timeout(1000)
+        wait_gone(page, ".el-loading-mask", timeout=4)   # 替代固定 1s
         return ("ok", "")
 
     res = _click_leaf()
@@ -732,7 +796,7 @@ def reset_to(page, url, tab_text=None, wait_ms=6000):
     if tab_text:
         try:
             page.locator(".el-tabs__item", has_text=tab_text).first.click(timeout=8000)
-            page.wait_for_timeout(2000)
+            wait_table_ready(page, timeout=8)            # 替代固定 2s
         except Exception:
             pass
     return True
@@ -867,7 +931,7 @@ def open_dropdown_menu(page, near_text="新增"):
     if caret.count():
         try:
             caret.first.click(force=True)
-            page.wait_for_timeout(1200)
+            wait_any(page, ".el-dropdown-menu__item:visible", timeout=3)
         except Exception:
             pass
     if not page.locator(".el-dropdown-menu__item:visible").count():
@@ -877,7 +941,7 @@ def open_dropdown_menu(page, near_text="新增"):
                 has=page.locator(f"button:has-text('{near_text}')")).first
             if grp.count():
                 grp.locator(".el-dropdown__caret-button, .el-dropdown__icon").first.click(force=True)
-                page.wait_for_timeout(1200)
+                wait_any(page, ".el-dropdown-menu__item:visible", timeout=3)
         except Exception:
             pass
     return list(dict.fromkeys(
@@ -891,7 +955,7 @@ def click_dropdown_item(page, text):
     if not loc.count():
         return False
     loc.click()
-    page.wait_for_timeout(1500)
+    wait_dialog_open(page, timeout=3) or wait_gone(page, ".el-dropdown-menu__item:visible", timeout=3)
     return True
 
 
@@ -910,7 +974,7 @@ def open_split_add_dropdown(page, entry_selector=".add-dropdown-btns-entry"):
         items = open_dropdown_menu(page)
         if items:
             page.locator(".el-dropdown-menu__item:visible").first.click()
-            page.wait_for_timeout(2500)
+            wait_dialog_open(page, timeout=5)          # 替代固定 2.5s
             return True
     except Exception:
         pass
@@ -930,7 +994,7 @@ def open_split_add_dropdown(page, entry_selector=".add-dropdown-btns-entry"):
               .filter(e=>e.offsetParent!==null);
               if(!els.length) return false; els[0].click(); return true; }"""
         )
-        page.wait_for_timeout(2500)
+        wait_dialog_open(page, timeout=5)              # 替代固定 2.5s
         return bool(ok)
     except Exception:
         return False

@@ -1,6 +1,6 @@
 # Element Plus 交互配方（表单 / 下拉 / 表格）
 
-> 来源：2026-09-10 真实跑「换线时间定义表（加工面）」时反复踩的坑。
+> 来源：2026-09-10 真实跑一个字段级需求（列表/筛选/新增/编辑/导入核验）时反复踩的坑。
 > 每条都固化成 `qa_skill_common/bbt_helpers.py` 里的函数，**不要再手写平行逻辑**。
 
 ## 一、七个高频坑（会重复踩）
@@ -13,7 +13,7 @@
 | 4 | 靠 DOM 猜「多选」 | 空的多选没有 `.el-tag` → **假 FAIL** | **行为判定**：`select_is_multiple(page, item, ["A","B"])`（选两个看是否都保留） |
 | 5 | 读下拉选中值用 `input.value` | 读到空字符串 | `select_value(item)`（读 `.el-select__selected-item`） |
 | 6 | 用 `Escape` 收下拉 | **把整个弹窗关了**，后续断言全废 | 不要按 Escape；下拉通常自动收起，需要时点空白处 |
-| 7 | 全局搜索用 `fill` | 不触发过滤、无结果 | 逐字 `type`：`goto_feature(page, "换线时间定义表")` |
+| 7 | 全局搜索用 `fill` | 不触发过滤、无结果 | 逐字 `type`：`goto_feature(page, "<功能名>")` |
 
 ## 二、常用配方
 
@@ -21,7 +21,7 @@
 ```python
 from bbt_osd_common import login_for_page, goto_feature
 login_for_page(page, "http://<host>/")
-url = goto_feature(page, "换线时间定义表")   # 返回落地 URL，失败返回 None
+url = goto_feature(page, "<功能名>")   # 返回落地 URL，失败返回 None；站点取 MES_URL
 ```
 
 ### 2. 按标签定位表单项（避免同名字段串台）
@@ -70,3 +70,26 @@ click_dropdown_item(page, "导入")
 | 可编辑 | 编辑弹窗含该字段且可下拉 |
 
 > 若某条需求需求原文未写明（如唯一性约束），标「需求未明确-需产品确认」，**不要自行判定为缺陷**。
+
+## 四、会话与等待（提速，2026-09-10）
+
+共享 helper 已把固定 sleep 换成条件等待，**不要再自己 `wait_for_timeout(5000)` 之类的长等待**：
+
+| helper | 作用 |
+| --- | --- |
+| `wait_app_ready(page)` | 等首屏就绪（内容元素出现 + loading 遮罩消失），替代 goto 后的固定 7s |
+| `wait_any(page, selector, timeout)` | 等任一选择器命中（逗号=OR） |
+| `wait_gone(page, selector, timeout)` | 等元素消失（如 `.el-loading-mask`） |
+| `ensure_login(page, target_url)` | 已登录则跳过登录（不重复走登录流程） |
+| `goto_feature(page, name)` | 按功能名直达；**命中缓存时直接跳转**（重复访问同一功能 ~2s） |
+| `session(base_url=...)`（`session_helpers`） | 一次会话上下文：起/连浏览器 + 登录 + 收尾，脚本不用重复样板 |
+
+用法：
+```python
+from session_helpers import session
+from bbt_osd_common import goto_feature
+with session(base_url="http://<host>") as page:
+    url = goto_feature(page, "<功能名>")
+```
+
+> 实测（某真实 MES 测试站点，单次会话固定开销）：**44.3s → 12.1s**；重复访问同一功能 **20.9s → ~3s**。

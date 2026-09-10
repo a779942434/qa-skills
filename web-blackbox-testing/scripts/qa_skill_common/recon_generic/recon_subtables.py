@@ -7,6 +7,7 @@ import argparse
 from playwright.sync_api import sync_playwright
 
 from ..bbt_osd_common import goto, login_for_page
+from ..bbt_helpers import wait_gone
 from ..bbt_helpers import launch_mes_browser
 
 
@@ -25,7 +26,7 @@ def main():
             print("主表行数:", n)
             for i in range(min(n, args.max_rows)):
                 page.locator(".el-table__row").nth(i).locator("td").nth(1).click()
-                page.wait_for_timeout(2000)
+                wait_gone(page, ".el-loading-mask", timeout=5)   # 替代固定 2s
                 print(f"===== 第{i+1}行 =====")
                 tables = page.evaluate(
                     """() => Array.from(document.querySelectorAll('.el-table')).map(t=>({

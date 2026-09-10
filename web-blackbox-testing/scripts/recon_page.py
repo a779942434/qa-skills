@@ -11,14 +11,14 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from bbt_helpers import connect, disconnect, snap  # noqa: E402
+from bbt_helpers import connect, disconnect, snap, wait_app_ready  # noqa: E402
 
 
 def recon(page, url=None, out_dir=None, feature="recon"):
     """对当前页（或跳转到 url）做一次完整结构侦察。"""
     if url:
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(6000)
+        wait_app_ready(page)                    # 替代固定 6s
     print("URL:", page.url)
     print("TITLE:", page.title())
 

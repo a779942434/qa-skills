@@ -11,12 +11,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ones_helpers import connect, disconnect, resolve_settings
+from qa_skill_common.bbt_helpers import wait_app_ready
 
 
 def attach_files(page, team_uuid, defect_uuid, files):
     base = resolve_settings()["ones_url"].rstrip("/")
     page.goto(f"{base}/project/#/team/{team_uuid}/task/{defect_uuid}", wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(7000)
+    wait_app_ready(page)                                   # 替代固定 7s
     page.evaluate(
         """() => {
             let target = null;
@@ -33,7 +34,10 @@ def attach_files(page, team_uuid, defect_uuid, files):
             return true;
         }"""
     )
-    page.wait_for_timeout(3000)
+    try:
+        page.wait_for_selector("input.upload-input", timeout=5000)   # 替代固定 3s
+    except Exception:
+        pass
     up = page.locator("input.upload-input")
     if up.count() == 0:
         return False, "未找到上传控件"

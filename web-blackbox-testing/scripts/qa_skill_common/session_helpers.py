@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager
 
 from playwright.sync_api import sync_playwright
 
@@ -95,6 +96,42 @@ def wait_until(obj, fn, timeout=30, interval=0.5):
             pass
         time.sleep(interval)
     return False
+
+
+@contextmanager
+def session(base_url=None, target_url=None, headless=True, cdp_port=None,
+            reuse_cdp=False, login=True):
+    """一次会话上下文管理器：起/连浏览器 → 确保登录 → yield page → 收尾。
+
+    用法：
+        from session_helpers import session
+        with session(base_url="http://<host>") as page:
+            goto(page, url)
+
+    - `reuse_cdp=True` 时连接常驻浏览器（收尾只断开客户端，不关浏览器）；
+    - `login=True` 时自动 ensure_login（已登录会跳过，不重复登录）。
+    """
+    launched = True
+    pw = browser = ctx = page = None
+    try:
+        if reuse_cdp:
+            launched = False
+            pw, browser, ctx, page = connect_session(cdp_url=f"http://127.0.0.1:{cdp_port or 9222}")
+        else:
+            pw, browser, ctx, page = launch_session(headless=headless, cdp_port=cdp_port)
+        if login:
+            from .bbt_osd_common import ensure_login
+            ensure_login(page, target_url=target_url, base_url=base_url)
+        yield page
+    finally:
+        if launched:
+            close_session(pw, browser, ctx, page)
+        else:
+            try:
+                if pw is not None:
+                    pw.stop()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

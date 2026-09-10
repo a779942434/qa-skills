@@ -7,6 +7,7 @@ import argparse
 from playwright.sync_api import sync_playwright
 
 from ..bbt_osd_common import goto, login_for_page
+from ..bbt_helpers import wait_dialog_open
 from ..bbt_helpers import launch_mes_browser
 
 
@@ -22,7 +23,7 @@ def main():
             login_for_page(page, args.url)
             goto(page, args.url)
             page.locator(f"button:has-text('{args.button}')").first.click()
-            page.wait_for_timeout(2000)
+            wait_dialog_open(page, timeout=8)          # 替代固定 2s
             data = page.evaluate(
                 """() => {
                     const ds=[...document.querySelectorAll('[role=dialog],.el-dialog,.el-drawer')].filter(d=>{const r=d.getBoundingClientRect();return r.width>0&&r.height>0;});

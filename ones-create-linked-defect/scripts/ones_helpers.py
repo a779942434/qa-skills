@@ -16,6 +16,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 from ones_config import resolve_settings
+from qa_skill_common.bbt_helpers import wait_any, wait_gone, wait_dialog_open, wait_app_ready
 
 
 def _cdp_url():
@@ -494,9 +495,9 @@ def open_work_order_drawer(page, team_uuid, task_uuid, title):
     settings = resolve_settings()
     base = settings["ones_url"].rstrip("/")
     page.goto(f"{base}/project/#/team/{team_uuid}/task/{task_uuid}", wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(7000)
+    wait_app_ready(page)                                   # 替代固定 7s
     page.locator("text=" + title).first.click(timeout=6000)
-    page.wait_for_timeout(5000)
+    wait_any(page, "text=关联内容", timeout=10)             # 等抽屉，替代固定 5s
     return _js_click_text(page, "关联内容")
 
 
@@ -507,9 +508,9 @@ def open_defect_form(page, team_uuid, task_uuid, title):
     """
     if not open_work_order_drawer(page, team_uuid, task_uuid, title):
         return None
-    page.wait_for_timeout(2500)
+    wait_any(page, "text=新建关联工作项", timeout=8)        # 替代固定 2.5s
     _js_click_text(page, "新建关联工作项")
-    page.wait_for_timeout(3500)
+    wait_dialog_open(page, timeout=8)                       # 替代固定 3.5s
     dlg = find_defect_dialog(page)
     if dlg is None:
         return None
@@ -529,7 +530,7 @@ def open_defect_form(page, team_uuid, task_uuid, title):
     inp = type_sel.locator("input.ones-select-selection-search-input").first
     inp.evaluate("(el) => el.focus()")
     page.keyboard.type("缺陷")
-    page.wait_for_timeout(2500)
+    wait_any(page, ".ones-select-dropdown [class*=option]", timeout=6)   # 替代固定 2.5s
     page.evaluate(
         """() => {
             let found = null;
@@ -549,7 +550,7 @@ def open_defect_form(page, team_uuid, task_uuid, title):
             if (found) found.click();
         }"""
     )
-    page.wait_for_timeout(5000)
+    wait_gone(page, ".ones-select-dropdown", timeout=6)     # 替代固定 5s
     return find_defect_dialog(page)
 
 
@@ -715,7 +716,7 @@ def list_related_tasks(page, team_uuid, task_uuid, title):
     注意：关联列表是 React Virtualized，只返回当前已渲染行；如需全量请滚动后多次调用合并。
     """
     open_work_order_drawer(page, team_uuid, task_uuid, title)
-    page.wait_for_timeout(4000)
+    wait_any(page, ".task-item", timeout=8)                 # 替代固定 4s
     return page.evaluate(
         """() => {
             const out = [];

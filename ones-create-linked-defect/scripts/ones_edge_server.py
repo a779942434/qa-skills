@@ -25,6 +25,7 @@ from playwright.sync_api import sync_playwright
 
 from edge_session_setup import ensure_session
 from ones_config import resolve_settings
+from qa_skill_common.bbt_helpers import wait_app_ready
 
 LOG = logging.getLogger("ones_edge_server")
 
@@ -108,7 +109,7 @@ def main():
 
     page = ctx.pages[0] if ctx.pages else ctx.new_page()
     page.goto(url, wait_until="domcontentloaded", timeout=45000)
-    page.wait_for_timeout(15000)
+    wait_app_ready(page, timeout=20)        # 替代固定 15s
 
     if not cdp_ready(port):
         LOG.warning("CDP 端口探测超时，请确认浏览器已启动")
