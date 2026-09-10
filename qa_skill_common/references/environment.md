@@ -60,7 +60,27 @@
 | `未配置 IPC 站点：请设置环境变量 IPC_BASE_URL` | 缺 IPC 站点 | `export IPC_BASE_URL=...` 或传 `base_url=...` |
 | ONES 每次都跳登录 | 登录态未复制/已过期 | 跑 `python scripts/ones_bootstrap.py --apply`（首次加 `--visible` 完成 SSO） |
 
-## 五、一次性配齐（示例）
+## 五、产物路径约定（web ↔ ones 交接）
+
+两个技能用**同一套产物根**解析（`scripts/qa_skill_common/paths.py`），从根上避免「web 产出、ones 找不到」：
+
+| 内容 | 路径 |
+| --- | --- |
+| 缺陷清单 | `<产物根>/bug-reports/YYYY-MM-DD_功能名_缺陷清单.md` |
+| 证据截图 | `<产物根>/bug-reports/<功能>/` |
+| 归档 | `<产物根>/knowledge-base/{test-reports,bug-reports,test-cases,notes}/` |
+
+产物根解析：`$QA_WORKSPACE` → 向上找 `.qa-workspace` / `.git` → 否则 `~/.codex/qa-workspace`。
+> 从**公共包位置**推导（不用 cwd），所以两个技能在同一台机器上得到同一个根，与当前目录、安装方式无关。
+> 想固定到某目录（如仓库根）：`export QA_WORKSPACE=/path/to/workspace`。
+
+**ones 的清单查找顺序**（`--bug-report` 只给文件名时）：
+`$ONES_BUG_REPORTS_DIR` → `$QA_BUG_REPORTS_DIR` → `<产物根>/bug-reports` → `<产物根>/knowledge-base/bug-reports`（历史位置）→ `cwd/bug-reports` → `<技能目录>/bug-reports`（旧默认）。
+都找不到会列出以上目录并报错。
+
+查看当前解析结果：`python scripts/qa_skill_common/paths.py`
+
+## 六、一次性配齐（示例）
 
 ```bash
 export MES_URL="http://<你的测试站点>"

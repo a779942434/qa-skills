@@ -17,6 +17,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = PROJECT_ROOT / "config"
 
+# 公共产物路径解析（随技能内置）；保证与 web-blackbox-testing 解析出的产物根一致
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from qa_skill_common import paths as qa_paths  # noqa: E402
+
 try:
     import yaml
 except ImportError:  # pragma: no cover - 仅当目标环境未装 PyYAML
@@ -150,7 +154,8 @@ def resolve_settings():
     if not settings.get("logs_dir"):
         settings["logs_dir"] = str(Path(edge["session_dir"]) / "logs")
     if not settings.get("bug_reports_dir"):
-        settings["bug_reports_dir"] = str(PROJECT_ROOT / "bug-reports")
+        # 统一产物根（默认 = $QA_WORKSPACE 或 <workspace>/bug-reports），不再落到技能安装目录
+        settings["bug_reports_dir"] = str(qa_paths.bug_reports_dir())
     return settings
 
 

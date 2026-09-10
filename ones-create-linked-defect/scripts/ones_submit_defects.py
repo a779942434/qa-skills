@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from qa_skill_common import paths as qa_paths  # noqa: E402
 from ones_config import load_field_mapping  # noqa: E402
 from ones_helpers import (  # noqa: E402
     DEFAULT_SEVERITY,
@@ -236,6 +237,17 @@ def main():
     args = ap.parse_args()
 
     team, task = parse_work_order(args.work_order)
+
+    # 清单定位：绝对路径直用；否则在统一产物根 + 历史位置中查找
+    resolved = qa_paths.find_bug_report(args.bug_report)
+    if resolved is None:
+        searched = "\n".join("  - " + str(d) for d in qa_paths.bug_report_search_dirs())
+        raise SystemExit(
+            f"未找到缺陷清单：{args.bug_report}\n"
+            f"可传绝对路径，或把清单放到以下任一目录（或用 ONES_BUG_REPORTS_DIR 指定）：\n{searched}"
+        )
+    args.bug_report = str(resolved)
+
     bugs = parse_bug_report(args.bug_report)
     wanted = expand_keys(args.only)
     if args.bugs:
@@ -255,7 +267,15 @@ def main():
     overrides = profile_overrides(profile)
     scope_uuid = (profile or {}).get("issue_type_scope_uuid")
     profile_warnings = check_profile(profile)
-    evidence_base = [str(Path(args.bug_report).resolve().parent)]
+    br_dir = Path(args.bug_report).resolve().parent
+    evidence_base = [str(br_dir)]
+    # web 约定：证据放在 <产物根>/bug-reports/<功能>/，补入一级子目录以便按文件名命中
+    try:
+        for sub in sorted(br_dir.iterdir()):
+            if sub.is_dir():
+                evidence_base.append(str(sub))
+    except OSError:
+        pass
     if profile and profile.get("site", {}).get("evidence_dir"):
         proj_root = Path(__file__).resolve().parent.parent
         evidence_base.insert(0, str(proj_root / profile["site"]["evidence_dir"]))

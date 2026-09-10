@@ -27,6 +27,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from api_wait import ApiWatcher  # noqa: E402
+from qa_skill_common import paths as qa_paths  # noqa: E402
 from bbt_osd_common import login_for_page  # noqa: E402
 from bbt_helpers import (  # noqa: E402
     attach_error_watchers, error_report, reset_to, snap,
@@ -43,7 +44,8 @@ CONFIG = {
     "base_url": os.environ.get("MES_URL", ""),
     "headless": True,
     "cdp_port": 9222,           # 只想复用常驻浏览器时用（--connect）
-    "out_dir": Path(os.environ.get("OUT_DIR", "./test-output")),
+    # 默认落到统一产物根 <workspace>/knowledge-base/test-reports（可用 OUT_DIR 覆盖）
+    "out_dir": Path(os.environ.get("OUT_DIR", str(qa_paths.test_reports_dir()))),
 }
 
 # ============================ CASES（按任务改） =============================

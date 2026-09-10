@@ -50,7 +50,7 @@ description: >-
 5. **一次会话一个长脚本**：一次登录跑完本任务全部用例；不每个脚本重新登录/新起浏览器。
 6. **只做标准用户操作**（点击/键入/下拉选择）。**禁止** JS 注入改值、改 DOM/属性绕过校验、对 disabled 输入框强填、改遮挡元素层级；标准操作不可行时记录为「待确认/缺陷/环境观察」，**不许硬绕**。
 7. **失败分级**：接口 5xx/超时/网络错 = 环境观察，跳过不重试；页面明确报错 = 业务失败，重试 ≤1 次仍失败截图进缺陷清单；操作成功以数据状态变化为准，toast 仅辅助。**校验被拦截（有 toast/内联错误提示）= 已处理业务拦截，记「通过/已拦截」≠失败**（判定见 references/playwright-strategy.md 的「组件库防误读与多信号判定」）。
-8. **结束闸门**：**测试环境保留造数为预期**，仅当确需清理时才清理并留痕；须记录本轮产生数据（单据编号/扣减量）并在报告/缺陷清单注明。`record_baseline/assert_new_target` 仅用于防误动历史数据。证据截图归档到 `bug-reports/<功能>/`，缺陷清单「证据」只写纯文件名；用 `ones_submit_defects.py` 提缺陷，缺主工单 URL 先问用户、**不许跳过**；报告/缺陷/用例归档到 `knowledge-base/` 对应目录。
+8. **结束闸门**：**测试环境保留造数为预期**，仅当确需清理时才清理并留痕；须记录本轮产生数据（单据编号/扣减量）并在报告/缺陷清单注明。`record_baseline/assert_new_target` 仅用于防误动历史数据。证据截图归档到 `<产物根>/bug-reports/<功能>/`（产物根见 [environment.md](scripts/qa_skill_common/references/environment.md)），缺陷清单「证据」只写纯文件名；用 `ones_submit_defects.py` 提缺陷，缺主工单 URL 先问用户、**不许跳过**；报告/缺陷/用例归档到 `knowledge-base/` 对应目录。
 ## 新站点适配侦察定式（2026-09-07 增补）
 
 > 适用：目标站点/组件库与固化站点（示例 Element UI 站点）不同（如自研 sy-*/div-table 组件、
@@ -232,7 +232,7 @@ description: >-
 - **接口核验替代（页面不渲染时）**：列表/明细页在自动化下不渲染（SPA/需菜单上下文/惰性加载）时，改用**接口只读核对**确认数据（如例中的 `ingredient/bom-preview` 已含全字段），并说明 UI 与接口差异，不硬读页面、不反复点。
 - **操作成功判定**：以数据状态变化为准（如页签卡片集合、接口 inUse/状态字段），toast 仅作辅助，不作为唯一判定依据。用 `bbt_helpers.judge_action` 综合「新接口+toast+内联错误+数据变化」四源，`processed=False` 且 reason=silent 才视为无反馈。
 - **失败隔离（用例间独立）**：每条用例 try/except 独立 + 前置 `bbt_helpers.reset_to(page, <URL>, 页签)` 回到已知态（含清勾选/关弹窗），避免单条失败中断整段或脏状态传染。
-- **证据统一归档**：测试结束把关键截图复制到 `bug-reports/功能名/` 目录，缺陷清单「证据」行只写纯文件名（不带分号/说明），便于提缺陷脚本解析。
+- **证据统一归档**：测试结束把关键截图复制到 `<产物根>/bug-reports/功能名/` 目录，缺陷清单「证据」行只写纯文件名（不带分号/说明），便于提缺陷脚本解析。
 - **报告/缺陷清单自动生成**：执行脚本用 `scripts/report_gen.py` 从用例结果直接生成报告/缺陷清单骨架，AI 只补分析与定级；测试改数据后用 `scripts/data_cleanup.py` 对比基线并留痕（已恢复/未恢复）。
 - **真窗口/复用登录态（2026-09-04 新增）**：需要操控**日常 Chrome 已登录的真实窗口**时，用 Playwright MCP 扩展模式（`~/.codex/config.toml` 已配 `[mcp_servers.playwright]` `--extension`；装 Playwright MCP Bridge 扩展 + 重启 Codex 后生效）；安装/Token/纪律见 `references/playwright-strategy.md`「Playwright MCP 真窗口模式」。
 

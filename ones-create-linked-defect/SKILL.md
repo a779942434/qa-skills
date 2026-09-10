@@ -57,8 +57,9 @@ description: >-
    `python scripts/ones_edge_server.py [工单URL]`——默认**后台静默启动**（headless，不弹窗），
    脚本会自动准备登录态（复制本机 Edge 登录态，v20 Cookie 只能由 Edge 本体解密）并启动浏览器。
    首次登录/飞书授权需可见窗口时加 `--visible` 参数，点击"授权"完成 SSO，后续即可静默运行。
-3. 本地缺陷清单在 `bug-reports/YYYY-MM-DD_功能名_缺陷清单.md`
-   （目录可在 `config/settings.yaml` 的 `bug_reports_dir` 调整；
+3. 本地缺陷清单在 `<产物根>/bug-reports/YYYY-MM-DD_功能名_缺陷清单.md`
+   （产物根与查找顺序见 [environment.md](scripts/qa_skill_common/references/environment.md)；
+   目录可在 `config/settings.yaml` 的 `bug_reports_dir` 或 `ONES_BUG_REPORTS_DIR` 调整；
    若由 `web-blackbox-testing` 技能产出，文件名与字段天然兼容），按工单标题中的功能名匹配；
    注意看文末"回归验证"段确定每个 BUG 是 通过/未通过/产品口径不算缺陷。
 4. 证据文件（截图、导入 Excel）在对应功能的测试输出目录，目录索引见 `config/field-mapping.yaml` 的 `evidence_dirs`。
