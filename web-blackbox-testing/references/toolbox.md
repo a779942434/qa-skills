@@ -23,6 +23,14 @@
   - `snap(page, name, out_dir, feature)`：语义化截图命名；
   - `record_baseline()` / `assert_new_target()`：数据基线记录与核对。
   - **防误报/隔离（2026-09-03 新增）**：`read_feedback(page)`（toast+内联错误+可见dialog）、`active_dialog/read_dialog`（作用域读弹窗）、`judge_action(page,action,...)`（多信号判定，`processed=False` 且 reason=silent 才视为无反馈）、`detect_cascade/select_cascade`（**先侦测两级父→子、匹配才走**级联）、`click_or_observe`（先判 disabled，禁用作状态观察）、`reset_to(page,url,页签)`（用例隔离回已知态）。详细用法见 references/playwright-strategy.md。
+- 组件指纹 / 结构对比 / 自愈定位（2026-09-11 新增，实现见 `qa_skill_common/fingerprint.py`）：
+  - `recon_page.py --url <URL> --probe`：组件指纹探针（class 前缀分布 + 组件库判定，只读）；
+  - `recon_page.py --url <URL> --save-fingerprint <名字>` / `--diff <名字>`：结构指纹快照与改版对比
+    （报出消失 / 变化 / 新增，替代人工重新侦察）；
+  - `fingerprint.resolve(page, selector=/text=, fingerprint=<名字>)`：选择器失效时按元素特征相似度自愈；
+    低置信不猜、返回候选（`ambiguous` / `low_confidence`）；
+  - `click_visible_text(..., heal="<名字>")`：把自愈挂成第 4 级降级（三级都失败才走）。
+  - 指纹存 `<workspace>/fingerprints/<名字>.json`（本机、不入 git、web 与 ones 两技能共享）。
 - `scripts/api_wait.py`：接口观测等待（核心等待方式，替代固定 sleep）。
   - `ApiWatcher(page)`：挂 response 监听（覆盖所有 frame）；
   - `snapshot()`：操作前取响应基线；`wait_new(base, keyword=None, timeout=15)`：等基线之后出现新响应（可用 URL 关键词缩小范围）；

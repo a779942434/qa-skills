@@ -739,7 +739,7 @@ def detect_cascade(page, trigger_sel=None, wait_ms=1500):
     try:
         return page.evaluate("""() => {
             const panels=[...document.querySelectorAll('.el-cascader-menu')].filter(p=>{const r=p.getBoundingClientRect();return r.width>0&&r.height>0;});
-            const nodeOf=p=>[...p.querySelectorAll('.el-cascader-node')].map(n=>(n.innerText||'').trim().replace(/\s+/g,' ')).filter(Boolean);
+            const nodeOf=p=>[...p.querySelectorAll('.el-cascader-node')].map(n=>(n.innerText||'').trim().replace(/\\s+/g,' ')).filter(Boolean);
             const levels=panels.map(nodeOf);
             const hasParentChild = levels.length>=2 && levels[0].length>0 && levels[1].length>0;
             const kind = levels.length>=2 ? 'el-cascader-2level' : (levels.length===1 ? 'single-list' : 'unknown');
@@ -868,13 +868,15 @@ def _click_and_describe(loc, timeout=3000, native=False):
     )
 
 
-def click_visible_text(page, text, roles=None, timeout=3000, native=False):
-    """点击页面【可见】的精确文本元素，按「语义 → 文本 → JS」逐级降级。
+def click_visible_text(page, text, roles=None, timeout=3000, native=False, heal=None):
+    """点击页面【可见】的精确文本元素，按「语义 → 文本 → JS → 指纹自愈」逐级降级。
 
     降级链（locator fallback ladder）：
       1) role      Playwright 语义定位 get_by_role —— 最稳；
       2) text      Playwright 精确文本 get_by_text(exact)；
-      3) js-text   JS 兜底：全 DOM 找可见叶子、向上找可点容器后 click（原实现）。
+      3) js-text   JS 兜底：全 DOM 找可见叶子、向上找可点容器后 click（原实现）；
+      4) heal      可选：三级都失败且 heal="<指纹名>" 时，按已保存指纹做相似度自愈
+                   （qa_skill_common/fingerprint.resolve）；低置信不点击，回候选。
 
     点击方式由 `native` 决定（性能差异大，详见 _click_and_describe）：
       native=False（默认）约 3ms 的 JS 精确点击；native=True 走 Playwright 原生 click（约 39ms）。
@@ -883,8 +885,8 @@ def click_visible_text(page, text, roles=None, timeout=3000, native=False):
     el-dialog__title「新增/编辑/日志」）导致点击超时；但部分站点组件又缺语义 role，
     只能靠 JS 兜底。分层后既保留定位精度，也保留最后的可用性。
 
-    返回 dict：{"ok": True, "via": "role:button"|"text"|"js-text", "on": "<TAG>.<class>"}
-    失败返回：{"ok": False, "via": "...", "why": "..."}
+    返回 dict：{"ok": True, "via": "role:button"|"text"|"js-text"|"heal:<名>", "on": "<TAG>.<class>"}
+    失败返回：{"ok": False, "via": "...", "why": "..."}（自愈低置信时额外带 candidates）
     **老键 ok / on / why 语义不变**，仅新增 via 记录命中了降级链的哪一级。
     """
     roles = list(roles or _ROLE_CANDIDATES)
@@ -934,12 +936,27 @@ def click_visible_text(page, text, roles=None, timeout=3000, native=False):
           (n||e).click();
           return {ok:true, on:(n||e).tagName+'.'+((n||e).className||'').toString().slice(0,60)};
         }""", text)
-        if isinstance(res, dict):
+        if not isinstance(res, dict):
+            res = {"ok": False, "via": "js-text", "why": "bad-result"}
+        else:
             res.setdefault("via", "js-text")
-            return res
-        return {"ok": False, "via": "js-text", "why": "bad-result"}
     except Exception as e:
-        return {"ok": False, "via": "js-text", "why": repr(e)[:120]}
+        res = {"ok": False, "via": "js-text", "why": repr(e)[:120]}
+
+    # 4) 可选指纹自愈（heal="<指纹名>"）：三级都失败才走；低置信不点击，回候选
+    if res.get("ok") or not heal:
+        return res
+    try:
+        from .fingerprint import resolve
+        r = resolve(page, text=text, fingerprint=heal)
+        if r.get("ok"):
+            on = _click_and_describe(r["locator"], timeout=timeout, native=native)
+            return {"ok": True, "via": "heal:%s" % heal, "on": on,
+                    "score": r.get("score"), "healed_from": r.get("healed_from")}
+        return {"ok": False, "via": "heal:%s" % heal, "why": r.get("reason"),
+                "candidates": r.get("candidates")}
+    except Exception as e:
+        return {"ok": False, "via": "heal:%s" % heal, "why": repr(e)[:120]}
 
 
 # ---------------------------------------------------------------------------

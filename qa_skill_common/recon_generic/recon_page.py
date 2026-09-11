@@ -7,6 +7,12 @@
   --limit N     表格行等列表的显示上限（默认 50；<=0 表示不截断）
   --find TEXT   只在侦察结果里检索该文本，只输出命中项（不 dump 全量，省 token）
   --json        以 JSON 输出完整结构（含 counts），便于程序与下游消费
+
+组件指纹与自愈（2026-09-11，实现 advanced-ui.md 的「组件指纹探针」定式）：
+  --probe                组件指纹探针：class 前缀分布 + iframe + 组件库判定（只读）
+  --save-fingerprint NAME 抓取结构指纹并落盘到 <workspace>/fingerprints/
+  --diff NAME            当前页面与已保存指纹对比，报出消失/变化/新增
+三个参数互斥；都省略时保持原有「页面结构侦察」行为不变。
 """
 import argparse
 import json
@@ -74,6 +80,55 @@ def render_find(s, needle):
     return "\n".join(lines)
 
 
+def render_probe(p):
+    """把组件指纹探针结果渲染成文本。"""
+    def _rows(items, key_label="label"):
+        return ", ".join(
+            "{} {}（{:.0%}）".format(r.get(key_label) or r.get("prefix"), r["count"], r["share"])
+            for r in items) or "无"
+    lines = [
+        "组件判定: {}".format(p.get("verdict")),
+        "命中组件库: {}".format(_rows(p.get("libraries") or [])),
+        "未知高频前缀: {}".format(_rows(p.get("unknown_prefixes") or [], "prefix")),
+        "元素总数: {}   class 实例: {}   iframe: {}".format(
+            p.get("total_elements"), p.get("total_class_instances"), p.get("iframes")),
+    ]
+    dist = p.get("class_prefixes") or []
+    if dist:
+        lines.append("前缀分布: " + ", ".join(
+            "{} {}（{:.0%}）".format(r["prefix"], r["count"], r["share"]) for r in dist[:8]))
+    return "\n".join(lines)
+
+
+def render_diff(d):
+    """把指纹对比结果渲染成文本。"""
+    if not d.get("ok"):
+        return "对比失败: {}  {}".format(d.get("reason"), json.dumps(d, ensure_ascii=False))
+    t = d.get("totals") or {}
+    lines = [
+        "指纹对比: {}（{}）".format(d.get("name"), d.get("url")),
+        "元素数: {} -> {}".format((d.get("counts") or {}).get("before"),
+                                  (d.get("counts") or {}).get("after")),
+        "消失 {} / 新增 {} / 变化 {}".format(t.get("disappeared"), t.get("appeared"), t.get("changed")),
+    ]
+    for x in d.get("disappeared") or []:
+        bm = x.get("best_match") or {}
+        lines.append("  [消失] {} {}  classes={}  最佳匹配 score={} text={}".format(
+            x.get("tag"), x.get("text"), x.get("classes"), bm.get("score"), bm.get("text")))
+    for x in d.get("changed") or []:
+        fields = x.get("fields") or {}
+        detail = "; ".join("{} {} -> {}".format(k, v.get("before"), v.get("after"))
+                           for k, v in fields.items())
+        lines.append("  [变化] {}  {}".format(x.get("ref"), detail))
+    for x in d.get("appeared") or []:
+        lines.append("  [新增] {} {}  classes={}".format(x.get("tag"), x.get("text"), x.get("classes")))
+    if d.get("probe_changed"):
+        lines.append("组件前缀变化: " + ", ".join(
+            "{} {} -> {}".format(k, v.get("before"), v.get("after"))
+            for k, v in d["probe_changed"].items()))
+    return "\n".join(lines)
+
+
 def build_parser():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", required=True)
@@ -82,6 +137,12 @@ def build_parser():
     ap.add_argument("--find", default=None,
                     help="只在侦察结果里检索该文本，只输出命中项（省 token）")
     ap.add_argument("--json", action="store_true", help="以 JSON 输出完整结构")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--probe", action="store_true", help="组件指纹探针（只读）")
+    mode.add_argument("--save-fingerprint", default=None, metavar="NAME",
+                      help="抓取结构指纹并落盘到 <workspace>/fingerprints/<NAME>.json")
+    mode.add_argument("--diff", default=None, metavar="NAME",
+                      help="当前页面与已保存指纹 <NAME> 对比")
     return ap
 
 
@@ -93,13 +154,27 @@ def main(argv=None):
         try:
             login_for_page(page, args.url)
             goto(page, args.url)
-            s = recon_page_structure(page, max_rows=args.limit)
-            if args.json:
-                print(json.dumps(s, ensure_ascii=False, indent=2))
-            elif args.find:
-                print(render_find(s, args.find))
+
+            if args.probe:
+                from ..fingerprint import probe_components
+                r = probe_components(page)
+                print(json.dumps(r, ensure_ascii=False, indent=2) if args.json else render_probe(r))
+            elif args.save_fingerprint:
+                from ..fingerprint import save_fingerprint
+                path = save_fingerprint(page, args.save_fingerprint)
+                print("已保存指纹: {}".format(path))
+            elif args.diff:
+                from ..fingerprint import diff_fingerprint
+                r = diff_fingerprint(page, args.diff)
+                print(json.dumps(r, ensure_ascii=False, indent=2) if args.json else render_diff(r))
             else:
-                print(render_text(s))
+                s = recon_page_structure(page, max_rows=args.limit)
+                if args.json:
+                    print(json.dumps(s, ensure_ascii=False, indent=2))
+                elif args.find:
+                    print(render_find(s, args.find))
+                else:
+                    print(render_text(s))
         finally:
             browser.close()
 
