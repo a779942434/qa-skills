@@ -133,7 +133,10 @@ assert_page_state(...)
 ## 侦察→固化→引用纪律（2026-08-21 增补）
 
 > 底线见 SKILL 必守 #4；本段给执行要求。
+> 组件指纹探针（`--probe`）/ 结构指纹（`--save-fingerprint`）/ 改版对比（`--diff`）/ 自愈定位
+> 的完整定式见 [advanced-ui.md](advanced-ui.md) 的「新站点适配侦察定式」。
 
+- 会反复测的页面，固化时同步 `--save-fingerprint <功能名>`；改版后用 `--diff <功能名>` 看差异，不必重新全量侦察。
 - 同一页面结构侦察最多 2 次；第 2 次前必须把稳定交互方式（选择器、事件、遮挡处理）写进 references。
 - 遇到新交互（自定义弹窗、刷卡层、iframe 多实例）→ 立即补 references 再继续，禁止反复 dump 同一页面。
 

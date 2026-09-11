@@ -28,10 +28,11 @@ description: >-
 
 > 依赖只装 Python 包：`pip install playwright pyyaml`（**不要** `playwright install`）。
 
-## 高频坑速查（两条最贵的）
+## 高频坑速查（三条最贵的）
 
 1. **新站点先适配再动手**：先跑组件指纹探针（`recon_page.py --probe`，一次给出组件库判定与未知前缀）与登录形态；不同就换选择器/登录，不套旧站点。入口优先用**全局搜索按功能名直达**，不走菜单逐级点。
 2. **盲点按钮/隐藏弹窗是高频误点源**：点击用 `bbt_helpers.click_visible_text`；「新增▾」类下拉用 `open_split_add_dropdown`；读弹窗用 `dump_visible_dialogs`。
+3. **页面改版先看差异再动手**：固化过的页面改版后先跑 `recon_page.py --url <URL> --diff <指纹名>` 看「消失 / 变化 / 新增」，只改受影响的部分；选择器失效时 `click_visible_text(page, text, heal="<指纹名>")` 可自愈，不必重新全量侦察。
 
 > 执行形态（一次会话一个总入口脚本）、等待基线、无视觉判定等已归入下方「必守清单 B」与「执行形态与等待基线」，此处不重复。
 
@@ -55,7 +56,7 @@ description: >-
 1. **复用固化脚本**：登录/导航用 `qa_skill_common`（`login_for_page`/`goto`），侦察用 `recon-generic/recon_page.py`，造数用 `bbt_osd_setup.py`，提缺陷用 `ones_submit_defects.py`；确有缺口才扩展，不另写平行替代脚本。
 2. **一次会话跑完**：一次登录 + 一个总入口长脚本串行跑完全部用例，不按用例反复起浏览器/登录。
 3. **等待优先级**：接口/响应基线等待 > 条件等待 > 固定 sleep（仅 ≤500ms 渲染余量/首次侦察兜底）。
-4. **侦察纪律**：同一页面侦察 ≤2 次，结果固化进 references 后直接引用；不 dump 整页文本。
+4. **侦察纪律**：同一页面侦察 ≤2 次，结果固化进 references 后直接引用；不 dump 整页文本。会反复测的页面，固化时**同步 `--save-fingerprint <功能名>` 存机器指纹**，改版后用 `--diff <功能名>` 看差异，不必重新侦察。
 5. **失败分级**：接口 5xx/超时 = 环境观察，跳过不重试；页面明确报错 = 业务失败，重试 ≤1 次后进缺陷清单。**校验被拦截（有 toast/内联错误）= 已处理业务拦截，记「通过/已拦截」≠ 失败**。
 6. **环境勘察先行**：开工先确认浏览器可用、站点连通、账号可登录（可先跑 `python scripts/check_env.py`）。
 
@@ -80,7 +81,7 @@ description: >-
 ## 新站点适配侦察定式
 
 适用：目标站点组件库/登录与固化站点不同（自研组件、非 Keycloak、iframe 等）。
-定式（组件指纹 → 全局搜索直达 → 一次会话内侦察固化 → 交互先探后点）见 [references/playwright-strategy.md](references/playwright-strategy.md) 的「新站点适配侦察定式」。
+定式（组件指纹 → 全局搜索直达 → 一次会话内侦察固化 → 交互先探后点）见 [references/advanced-ui.md](references/advanced-ui.md) 的「新站点适配侦察定式」。
 
 ## 边界 / 前置 / 默认原则
 
