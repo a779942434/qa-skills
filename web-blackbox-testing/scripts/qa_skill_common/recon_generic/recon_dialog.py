@@ -29,7 +29,7 @@ def main():
                     const ds=[...document.querySelectorAll('[role=dialog],.el-dialog,.el-drawer')].filter(d=>{const r=d.getBoundingClientRect();return r.width>0&&r.height>0;});
                     const d=ds[ds.length-1];
                     return {
-                        text:(d.innerText||'').trim().replace(/\\n+/g,' | ').slice(0,1200),
+                        text:(d.innerText||'').trim().replace(/[\\n\\t]+/g,' | ').slice(0,1200),
                         items:[...d.querySelectorAll('.el-form-item')].map((it,i)=>({i,label:(it.querySelector('.el-form-item__label')||{}).innerText||'',hasSelect:!!it.querySelector('.el-select'),inputs:[...it.querySelectorAll('input')].map(x=>x.type)}))
                     };
                 }"""

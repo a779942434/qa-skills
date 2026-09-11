@@ -4,19 +4,21 @@
 
 - `scripts/recon_page.py`：统一页面侦察器，一次输出 URL/标题/登录态/筛选控件/按钮/表格列头/可见弹窗字段，替代碎片化侦察。
 - `scripts/recon-generic/`：通用页面侦察工具（`--url` 参数化，Element UI 页面可复用）：
-  - `recon_page.py --url <URL>`：按钮/表头/行/弹窗；
+  - `recon_page.py --url <URL>`：按钮/表头/行/弹窗；默认行数上限 50（`--limit N` 可调，<=0 不截断），
+    `--find <文本>` 只输出命中项（不 dump 全量、省 token），`--json` 输出完整结构（含 counts）；
   - `recon_dialog.py --url <URL> --button 新增`：弹窗表单字段结构（label + 控件类型）；
   - `recon_dropdown.py --url <URL> --button 新增`：下拉可见选项；
   - `recon_subtables.py --url <URL>`：点击主表行 dump 子表。
 - `scripts/bbt_helpers.py`：
-  - **无视觉/盲操作辅助（2026-09-07 新增）**：`click_visible_text(page, text)`（JS 点可见精确文本，自动避开隐藏弹窗标题）、
+  - **无视觉/盲操作辅助（2026-09-07 新增）**：`click_visible_text(page, text)`（**role → text → JS 三级降级**点可见精确文本，返回体新增 `via` 标明命中层级，自动避开隐藏弹窗标题）、
     `open_split_add_dropdown(page)`（真实 hover 展开「新增▾」类下拉并点首项，如子表「导入 Excel」）、
     `dump_visible_dialogs(page)`（只读可见弹窗文本，替代整页 innerText）。
   - `find_page(ctx, url_contains, title_contains)` / `connect(cdp_url, url_contains=..., title_contains=...)`：连常驻浏览器并优先复用已有页面；
   - `attach_error_watchers(page)` / `collect_toasts()` / `error_report()`：console、HTTP≥400、页面提示三路错误监听；
   - `wait_visible` / `wait_text` / `wait_button` / `wait_toast(page, keyword)` / `wait_until`：条件等待（元素/文本/按钮/提示），替代固定 sleep；
   - `retry(fn, attempts=2)` / `close_dialog(page)`：防无限重试、弹窗收尾清理；
-  - `recon_page_structure(page)` / `recon_once(page, url)`：一次性侦察返回页面结构，供固化；
+  - `recon_page_structure(page, max_rows=50, max_buttons=60, ...)` / `recon_once(page, url, **kw)`：
+    一次性侦察返回页面结构（列表项限量，新增 `counts` 告知实际总数，便于判断是否被截断），供固化；
   - `table_columns()` / `read_table_rows()`：按列头读表格；
   - `snap(page, name, out_dir, feature)`：语义化截图命名；
   - `record_baseline()` / `assert_new_target()`：数据基线记录与核对。

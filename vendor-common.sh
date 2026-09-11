@@ -22,7 +22,9 @@ SRC="$REPO_DIR/qa_skill_common"
 TARGET_SKILLS=(web-blackbox-testing ones-create-linked-defect)
 
 # 不参与内置的文件（仅开发侧文档/缓存）
-EXCLUDES=(--exclude 'README.md' --exclude '__pycache__' --exclude '.DS_Store')
+EXCLUDES=(--exclude 'README.md' --exclude '__pycache__' --exclude '.DS_Store' --exclude 'tests')
+# 同一份排除规则给 diff（--check 用），避免「tests 只在源目录」被判成漂移
+DIFF_EXCLUDES=(-x README.md -x '__pycache__' -x '.DS_Store' -x tests)
 
 MODE=sync
 for arg in "$@"; do
@@ -42,11 +44,11 @@ for skill in "${TARGET_SKILLS[@]}"; do
     if [ ! -d "$dst" ]; then
       echo "[缺失] $skill/scripts/qa_skill_common"; failed=1; continue
     fi
-    if diff -r -x README.md -x '__pycache__' -x '.DS_Store' "$SRC" "$dst" >/dev/null 2>&1; then
+    if diff -r "${DIFF_EXCLUDES[@]}" "$SRC" "$dst" >/dev/null 2>&1; then
       echo "[一致] $skill/scripts/qa_skill_common"
     else
       echo "[漂移] $skill/scripts/qa_skill_common 与 qa_skill_common/ 不一致"
-      diff -rq -x README.md -x '__pycache__' -x '.DS_Store' "$SRC" "$dst" || true
+      diff -rq "${DIFF_EXCLUDES[@]}" "$SRC" "$dst" || true
       failed=1
     fi
   else

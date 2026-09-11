@@ -282,7 +282,7 @@ def read_table_by_header(page, keyword):
             for (const t of ts) {
                 const h = Array.from(t.querySelectorAll('th')).map(x => (x.innerText||'').trim());
                 if (h.some(x => x.includes(kw))) {
-                    return {hdr: h, rows: Array.from(t.querySelectorAll('.el-table__row')).map(r => (r.innerText||'').trim().replace(/\\n+/g,' | '))};
+                    return {hdr: h, rows: Array.from(t.querySelectorAll('.el-table__row')).map(r => (r.innerText||'').trim().replace(/[\\n\\t]+/g,' | '))};
                 }
             }
             return null;

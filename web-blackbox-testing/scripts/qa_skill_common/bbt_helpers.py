@@ -488,26 +488,59 @@ def parse_import_template(path):
     return headers
 
 
-def recon_page_structure(page):
-    """一次性返回当前页面结构 dict（按钮/表头/行/输入框/弹窗），供固化与对比。"""
+def recon_page_structure(page, max_rows=50, max_buttons=60, max_inputs=20, max_dialogs=5):
+    """一次性返回当前页面结构 dict（按钮/表头/行/输入框/弹窗），供固化与对比。
+
+    限量（2026-09-11）：列表页动辄几百行，全量 dump 既慢又灌爆上下文。
+    这里对 rows/buttons/inputs/dialogs 截断，并新增 ``counts`` 告知每项「实际总数」，
+    调用方据此判断是否被截断（如 counts.rows=328 / 返回 rows 只有 50 条）。
+
+    默认值面向 MES 列表页（一页约 30 行，取 50 留余量）。
+    ``max_rows<=0`` 等非正数表示该项不截断（保留老的全量语义）。
+    返回体的键名与含义对老调用方完全兼容，仅**新增** counts。
+    """
     return page.evaluate(
-        """() => ({
+        """([maxRows, maxButtons, maxInputs, maxDialogs]) => {
+          const all = (sel) => [...document.querySelectorAll(sel)];
+          const txt = (e) => (e.innerText || '').trim();
+          // <=0 视为不截断（slice 用 undefined 表达"取全部"）
+          const cap = (n) => (typeof n === 'number' && n > 0 ? n : undefined);
+          const buttons = all('button').map(txt).filter(Boolean);
+          const headers = all('.el-table th').map(txt).filter(Boolean);
+          const rows = all('.el-table__row').map(r => txt(r).replace(/[\\n\\t]+/g, ' | '));
+          const inputs = all('input').map(i => ({ph: i.placeholder || '', type: i.type || ''}));
+          const dialogs = all('[role=dialog],.el-dialog')
+            .filter(d => { const r = d.getBoundingClientRect(); return r.width > 0 && r.height > 0; })
+            .map(d => txt(d).replace(/[\\n\\t]+/g, ' | ').slice(0, 600));
+          return {
             url: location.href,
             title: document.title,
-            buttons: [...document.querySelectorAll('button')].map(b=>(b.innerText||'').trim()).filter(Boolean),
-            headers: [...document.querySelectorAll('.el-table th')].map(x=>(x.innerText||'').trim()).filter(Boolean),
-            rows: [...document.querySelectorAll('.el-table__row')].map(r=>(r.innerText||'').trim().replace(/\\n+/g,' | ')),
-            inputs: [...document.querySelectorAll('input')].map(i=>({ph:i.placeholder||'',type:i.type||''})).slice(0,20),
-            dialogs: [...document.querySelectorAll('[role=dialog],.el-dialog')].filter(d=>{const r=d.getBoundingClientRect();return r.width>0&&r.height>0;}).map(d=>(d.innerText||'').trim().replace(/\\n+/g,' | ').slice(0,600))
-        })"""
+            buttons: buttons.slice(0, cap(maxButtons)),
+            headers: headers,
+            rows: rows.slice(0, cap(maxRows)),
+            inputs: inputs.slice(0, cap(maxInputs)),
+            dialogs: dialogs.slice(0, cap(maxDialogs)),
+            counts: {
+              buttons: buttons.length,
+              headers: headers.length,
+              rows: rows.length,
+              inputs: inputs.length,
+              dialogs: dialogs.length
+            }
+          };
+        }""",
+        [max_rows, max_buttons, max_inputs, max_dialogs],
     )
 
 
-def recon_once(page, url, wait_ms=7000):
-    """导航到 URL 并一次性返回页面结构（页面需已登录）。"""
+def recon_once(page, url, wait_ms=7000, **kw):
+    """导航到 URL 并一次性返回页面结构（页面需已登录）。
+
+    ``**kw`` 透传给 recon_page_structure（max_rows / max_buttons / ...）。
+    """
     page.goto(url, wait_until="domcontentloaded", timeout=60000)
     page.wait_for_timeout(wait_ms)
-    return recon_page_structure(page)
+    return recon_page_structure(page, **kw)
 
 
 # ---------- 6. 多信号反馈判定（防误报，2026-09-03 增补） ----------
@@ -596,9 +629,9 @@ def read_dialog(page, idx=-1):
             if(!ds.length) return null;
             const d=ds[ds.length-1];
             return {title:(d.querySelector('.el-dialog__title')||{}).innerText||'',
-                    text:(d.innerText||'').replace(/\n+/g,' | ').slice(0,3000),
+                    text:(d.innerText||'').replace(/[\\n\\t]+/g,' | ').slice(0,3000),
                     nDlg:ds.length,
-                    tables:[...d.querySelectorAll('.el-table')].map(t=>({hdr:[...t.querySelectorAll('th')].map(x=>(x.innerText||'').trim()).filter(Boolean),rows:[...t.querySelectorAll('.el-table__row')].map(r=>(r.innerText||'').replace(/\n+/g,' | '))})).slice(0,4),
+                    tables:[...d.querySelectorAll('.el-table')].map(t=>({hdr:[...t.querySelectorAll('th')].map(x=>(x.innerText||'').trim()).filter(Boolean),rows:[...t.querySelectorAll('.el-table__row')].map(r=>(r.innerText||'').replace(/[\\n\\t]+/g,' | '))})).slice(0,4),
                     inputs:[...d.querySelectorAll('input')].filter(i=>{const r=i.getBoundingClientRect();return r.width>0&&r.height>0;}).map(i=>({ph:i.placeholder||'',val:(i.value||'').slice(0,40),dis:i.disabled})).slice(0,20),
                     buttons:[...new Set([...d.querySelectorAll('button')].filter(b=>b.offsetParent!==null).map(b=>(b.innerText||'').trim()).filter(Boolean))]};
         }""", idx)
@@ -803,15 +836,73 @@ def reset_to(page, url, tab_text=None, wait_ms=6000):
 
 # ---------- 无视觉/盲操作辅助（2026-09-07 增补，来源：设备-人员权限表实测固化） ----------
 
-def click_visible_text(page, text):
-    """点击页面【可见】的精确文本元素（JS 直点，自动向上找可点容器）。
+# 语义定位候选 role（顺序即优先级）：按钮 → 链接 → 菜单项 → 页签 → 选项 → 勾选 → 树节点
+_ROLE_CANDIDATES = (
+    "button", "link", "menuitem", "menuitemcheckbox", "menuitemradio",
+    "tab", "option", "checkbox", "radio", "treeitem", "switch",
+)
+
+
+def _describe_element(loc):
+    """返回 '<TAG>.<class 前60字>'，对应老结果里的 on 字段。"""
+    try:
+        return loc.evaluate("e => e.tagName + '.' + String(e.className || '').slice(0, 60)")
+    except Exception:
+        return "?"
+
+
+def click_visible_text(page, text, roles=None, timeout=3000):
+    """点击页面【可见】的精确文本元素，按「语义 → 文本 → JS」逐级降级。
+
+    降级链（locator fallback ladder）：
+      1) role      Playwright 语义定位 get_by_role —— 最稳，且走原生可操作性检查；
+      2) text      Playwright 精确文本 get_by_text(exact) —— 仍走原生检查；
+      3) js-text   JS 兜底：全 DOM 找可见叶子、向上找可点容器后 click（原实现）。
 
     背景：盲操作（无截图视觉）时，Playwright `text=` 常命中隐藏弹窗标题（如
-    el-dialog__title「新增/编辑/日志」）导致点击超时。本函数只取 offsetParent
-    非空的可见叶子，再向上找 button/a/btn/item/option/title/tab/cell 容器点击。
+    el-dialog__title「新增/编辑/日志」）导致点击超时；但部分站点组件又缺语义 role，
+    只能靠 JS 兜底。分层后既保留稳定性，也保留最后的可用性。
 
-    返回 dict：{"ok": True, "on": "<tag>.<class>"} 或 {"ok": False, "why": "..."}
+    返回 dict：{"ok": True, "via": "role:button"|"text"|"js-text", "on": "<TAG>.<class>"}
+    失败返回：{"ok": False, "via": "...", "why": "..."}
+    **老键 ok / on / why 语义不变**，仅新增 via 记录命中了降级链的哪一级。
     """
+    roles = list(roles or _ROLE_CANDIDATES)
+
+    # 1) 语义 role 定位（最稳，且使用 Playwright 原生可操作性检查）
+    for role in roles:
+        try:
+            loc = page.get_by_role(role, name=text, exact=True)
+            if not loc.count():
+                continue
+            first = loc.first
+            if not first.is_visible():
+                continue
+            try:
+                first.click(timeout=timeout)
+                return {"ok": True, "via": "role:%s" % role, "on": _describe_element(first)}
+            except Exception:
+                # 已找到「可见的语义目标」却点不动（多为被遮挡/动画中）——
+                # 再试其它 role 无意义，直接降级到 text，避免 10+ 次超时累积
+                break
+        except Exception:
+            continue
+
+    # 2) Playwright 精确文本（可见才点，避免命中隐藏弹窗标题）
+    try:
+        loc = page.get_by_text(text, exact=True)
+        for i in range(min(loc.count(), 5)):
+            el = loc.nth(i)
+            try:
+                if el.is_visible():
+                    el.click(timeout=timeout)
+                    return {"ok": True, "via": "text", "on": _describe_element(el)}
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # 3) JS 兜底（原实现：可见叶子 + 向上找可点容器）
     try:
         res = page.evaluate("""(txt) => {
           const all=[...document.querySelectorAll('*')].filter(e=>e.offsetParent!==null
@@ -824,9 +915,12 @@ def click_visible_text(page, text):
           (n||e).click();
           return {ok:true, on:(n||e).tagName+'.'+((n||e).className||'').toString().slice(0,60)};
         }""", text)
-        return res
+        if isinstance(res, dict):
+            res.setdefault("via", "js-text")
+            return res
+        return {"ok": False, "via": "js-text", "why": "bad-result"}
     except Exception as e:
-        return {"ok": False, "why": repr(e)[:120]}
+        return {"ok": False, "via": "js-text", "why": repr(e)[:120]}
 
 
 # ---------------------------------------------------------------------------
@@ -1009,7 +1103,7 @@ def dump_visible_dialogs(page, max_len=1800):
         return page.evaluate(
             """(maxLen) => [...document.querySelectorAll('.sy-dialog,.el-dialog')]
               .filter(x=>x.offsetParent!==null)
-              .map(x=>(x.innerText||'').trim().slice(0,maxLen))""",
+              .map(x=>(x.innerText||'').trim().replace(/[\\n\\t]+/g,' | ').slice(0,maxLen))""",
             max_len,
         )
     except Exception:

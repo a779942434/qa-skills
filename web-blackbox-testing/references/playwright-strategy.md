@@ -108,7 +108,7 @@ assert_page_state(...)
   3. 固定 `wait_for_timeout` 只用于接口返回后的渲染余量（≤500ms）、首次侦察、无信号兜底。
   一次会话内共用监听器，不重复挂载；同一用例不既用接口等待又叠一堆 sleep。
 - 无视觉（后台无头）模式：截图仅作证据归档，判定一律走可见 DOM/文本/接口信号；
-  - 点击用 `bbt_helpers.click_visible_text`（只取 offsetParent 非空元素，避免命中隐藏 el-dialog__title 等）；
+  - 点击用 `bbt_helpers.click_visible_text`（按 **role → text → JS** 三级降级；结果里的 `via` 标明命中了哪一级，便于统计定位稳定性；只取 offsetParent 非空元素，避免命中隐藏 el-dialog__title 等）；
   - 分体按钮（新增▾）用 `bbt_helpers.open_split_add_dropdown`（真实 hover 才能触发 el-popover）；
   - 弹窗内容用 `bbt_helpers.dump_visible_dialogs` 按作用域读取，不再整页 innerText 大海捞针；
   - 关键交互（弹窗 0 条、异常 toast、下拉项）仍截图，供用户/人工抽核防误报。

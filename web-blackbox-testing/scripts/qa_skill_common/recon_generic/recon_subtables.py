@@ -31,7 +31,7 @@ def main():
                 tables = page.evaluate(
                     """() => Array.from(document.querySelectorAll('.el-table')).map(t=>({
                         hdr:Array.from(t.querySelectorAll('th')).map(x=>(x.innerText||'').trim()).filter(Boolean),
-                        rows:Array.from(t.querySelectorAll('.el-table__row')).map(r=>(r.innerText||'').trim().replace(/\\n+/g,' | '))
+                        rows:Array.from(t.querySelectorAll('.el-table__row')).map(r=>(r.innerText||'').trim().replace(/[\\n\\t]+/g,' | '))
                     }))"""
                 )
                 for t in tables:
