@@ -50,10 +50,11 @@ description: >-
 3. **不脑补**：需求/接口/字段没有的一律不编造；必填字段来源不明就标「待确认/需造数」。
 4. **不泄露凭据**：账号、密码、Token、Cookie、个人敏感信息不写入报告、截图文件名或知识库。
 5. **不碰历史数据**：只操作本轮创建或用户明确授权的数据；未确认环境性质时按生产环境保守处理。
+6. **判定缺陷前必须多信号**：凡结论是「无提示 / 无法操作 / 未生效」，必须确认四源（新接口 + toast + 内联错误 + 数据变化）全为负（`judge_action` 的 `reason="silent"`）；只看单层信号（仅内联错误 / 仅 toast / 仅无响应）不得下结论。
 
 ### B. 默认做法（可自行决定，不必逐一确认）
 
-1. **复用固化脚本**：登录/导航用 `qa_skill_common`（`login_for_page`/`goto`），侦察用 `recon-generic/recon_page.py`，造数用 `bbt_osd_setup.py`，提缺陷用 `ones_submit_defects.py`；确有缺口才扩展，不另写平行替代脚本。
+1. **复用固化脚本**：登录/导航用 `qa_skill_common`（`login_for_page`/`goto`），侦察用 `recon-generic/recon_page.py`，造数用 `bbt_osd_setup.py`，提缺陷用 `ones_submit_defects.py`；确有缺口才扩展，不另写平行替代脚本。**等待用 `api_wait.ApiWatcher`（不用 `wait_for_timeout` > 500ms）；判定操作结果用 `judge_action` 四源交叉；多级交互（级联/树）先 `detect_cascade` 再点。**
 2. **一次会话跑完**：一次登录 + 一个总入口长脚本串行跑完全部用例，不按用例反复起浏览器/登录。
 3. **等待优先级**：接口/响应基线等待 > 条件等待 > 固定 sleep（仅 ≤500ms 渲染余量/首次侦察兜底）。
 4. **侦察纪律**：同一页面侦察 ≤2 次，结果固化进 references 后直接引用；不 dump 整页文本。会反复测的页面，固化时**同步 `--save-fingerprint <功能名>` 存机器指纹**，改版后用 `--diff <功能名>` 看差异，不必重新侦察。
