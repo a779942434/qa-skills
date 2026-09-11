@@ -124,6 +124,20 @@ class TestVerdict(unittest.TestCase):
         libs = [self.lib("el-", "element-plus", 0.65), self.lib("sy-", "custom-sy", 0.25)]
         self.assertEqual(F._decide_verdict(libs, []), "element-plus")
 
+    def test_primary_when_no_dominant_but_clear_leader(self):
+        """最高库 >= 30% 且无第二库 >= 20% -> 判该库（primary 档）。"""
+        libs = [self.lib("el-", "element-plus", 0.44), self.lib("sy-", "custom-sy", 0.15)]
+        self.assertEqual(F._decide_verdict(libs, []), "element-plus")
+
+    def test_primary_does_not_override_mixed(self):
+        """两个库都 >= 20% 时仍判 mixed，primary 不抢戏。"""
+        libs = [self.lib("el-", "element-plus", 0.44), self.lib("sy-", "custom-sy", 0.25)]
+        self.assertEqual(F._decide_verdict(libs, []), "mixed")
+
+    def test_primary_requires_30_percent(self):
+        """最高库 < 30% 时不判 primary。"""
+        self.assertEqual(F._decide_verdict([self.lib("el-", "element-plus", 0.25)], []), "unknown")
+
 
 class TestProbe(unittest.TestCase):
     def test_counts_shares_and_unknown(self):
@@ -153,6 +167,26 @@ class TestProbe(unittest.TestCase):
                                                "class_counts": {}}))
         self.assertEqual(r["verdict"], "unknown")
         self.assertEqual(r["class_prefixes"], [])
+
+    def test_status_prefixes_go_to_decorators(self):
+        """is-* 是状态类：归 decorators，不进 unknown、不参与判定。"""
+        page = FakePage(probe={"total_elements": 20, "iframes": 0,
+                               "class_counts": {"el-button": 7, "is-active": 2, "is-disabled": 1}})
+        r = F.probe_components(page)
+        self.assertEqual([d["prefix"] for d in r["decorators"]], ["is-"])
+        self.assertEqual(r["unknown_prefixes"], [])
+        self.assertEqual(r["verdict"], "element-plus")
+
+    def test_primary_verdict_from_probe(self):
+        """真实站点形态：el- 40% + 工具类稀释 -> primary 判 element-plus。"""
+        page = FakePage(probe={"total_elements": 100, "iframes": 0,
+                               "class_counts": {"el-button": 20, "is-active": 5,
+                                                "w-full": 20, "flex": 5}})
+        r = F.probe_components(page)
+        # 分母 50：el- 40% (>=30%, 无第二库) -> primary；is- 归 decorators；w- 10% 进 unknown
+        self.assertEqual(r["verdict"], "element-plus")
+        self.assertEqual([d["prefix"] for d in r["decorators"]], ["is-"])
+        self.assertNotIn("is-", [u["prefix"] for u in r["unknown_prefixes"]])
 
 
 class TestSanitizeName(unittest.TestCase):

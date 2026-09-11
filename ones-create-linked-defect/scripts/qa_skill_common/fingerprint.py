@@ -51,7 +51,13 @@ _PREFIX_SLUG = {p: slug for p, slug, _ in KNOWN_PREFIXES}
 _PREFIX_LABEL = {p: label for p, _, label in KNOWN_PREFIXES}
 
 LIB_DOMINANT = 0.60     # 单库占比达到此值即认定该组件库
+LIB_PRIMARY = 0.30      # 无 dominant 时，最高已知库达到此值且无第二库 >= LIB_PRESENT 即认定该库
 LIB_PRESENT = 0.20      # 参与 mixed 判定的占比下限
+
+# 状态/修饰类前缀：表达状态（is-active/is-disabled）或行为标记，不标识组件库。
+# 实测（真实 MES 站点）Element Plus 页面上 is-* 占比可达 11%，若算作「未知前缀」
+# 会误导判定，故单独归到 decorators 字段，既不进 unknown 也不参与 verdict。
+DECORATOR_PREFIXES = frozenset({"is-", "has-", "js-", "sr-", "v-"})
 UNKNOWN_MIN = 0.05      # 未知前缀进入报告的最低占比
 UNKNOWN_SUSPECT = 0.20  # 未知前缀被判「疑似自研」的占比下限
 
@@ -100,10 +106,14 @@ def class_prefix(cls):
 def _decide_verdict(libraries, unknown):
     """按占比判定组件库同源性。
 
-    单库占比 >= 60%            -> 该库 slug
-    两个及以上已知库 >= 20%    -> 'mixed'
-    已知库都 < 20%、有未知前缀 >= 20% -> 'custom'
-    其余                       -> 'unknown'
+    单库占比 >= 60%                     -> 该库 slug（dominant）
+    两个及以上已知库 >= 20%             -> 'mixed'
+    最高已知库 >= 30% 且无第二库 >= 20% -> 该库 slug（primary）
+    无已知库 >= 20%、有未知前缀 >= 20%  -> 'custom'
+    其余                                -> 'unknown'
+
+    primary 档解决真实场景：Element Plus 44% 被 Tailwind 工具类稀释后达不到 60%，
+    按旧规则会误判 unknown，而 44% 已足以说明「本站是 Element Plus 站点」。
     """
     dominant = [r for r in libraries if r["share"] >= LIB_DOMINANT]
     if dominant:
@@ -111,6 +121,8 @@ def _decide_verdict(libraries, unknown):
     present = [r for r in libraries if r["share"] >= LIB_PRESENT]
     if len(present) >= 2:
         return "mixed"
+    if libraries and libraries[0]["share"] >= LIB_PRIMARY and len(present) <= 1:
+        return libraries[0]["slug"]
     if not present and any(r["share"] >= UNKNOWN_SUSPECT for r in unknown):
         return "custom"
     return "unknown"
@@ -150,17 +162,21 @@ def probe_components(page):
         })
     rows.sort(key=lambda r: -r["count"])
 
-    libraries = []
+    libraries, decorators = [], []
     for r in rows:
         if r["slug"]:
             libraries.append({"prefix": r["prefix"], "slug": r["slug"], "label": r["label"],
                               "count": r["count"], "share": r["share"]})
+        elif r["prefix"] in DECORATOR_PREFIXES:
+            decorators.append({"prefix": r["prefix"], "count": r["count"], "share": r["share"]})
     unknown = [{"prefix": r["prefix"], "count": r["count"], "share": r["share"]}
-               for r in rows if not r["slug"] and r["share"] >= UNKNOWN_MIN]
+               for r in rows if not r["slug"] and r["prefix"] not in DECORATOR_PREFIXES
+               and r["share"] >= UNKNOWN_MIN]
 
     return {
         "verdict": _decide_verdict(libraries, unknown),
         "libraries": libraries,
+        "decorators": decorators,
         "unknown_prefixes": unknown,
         "class_prefixes": rows[:_PROBE_TOP_N],
         "total_elements": raw.get("total_elements", 0),

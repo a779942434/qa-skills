@@ -90,6 +90,7 @@ def render_probe(p):
         "组件判定: {}".format(p.get("verdict")),
         "命中组件库: {}".format(_rows(p.get("libraries") or [])),
         "未知高频前缀: {}".format(_rows(p.get("unknown_prefixes") or [], "prefix")),
+        "状态/修饰类: {}".format(_rows(p.get("decorators") or [], "prefix")),
         "元素总数: {}   class 实例: {}   iframe: {}".format(
             p.get("total_elements"), p.get("total_class_instances"), p.get("iframes")),
     ]
