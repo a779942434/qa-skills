@@ -10,7 +10,7 @@
   - `recon_dropdown.py --url <URL> --button 新增`：下拉可见选项；
   - `recon_subtables.py --url <URL>`：点击主表行 dump 子表。
 - `scripts/bbt_helpers.py`：
-  - **无视觉/盲操作辅助（2026-09-07 新增）**：`click_visible_text(page, text)`（**role → text → JS 三级降级**点可见精确文本，返回体新增 `via` 标明命中层级，自动避开隐藏弹窗标题）、
+  - **无视觉/盲操作辅助（2026-09-07 新增）**：`click_visible_text(page, text)`（**role → text → JS 三级降级**点可见精确文本，返回体新增 `via` 标明命中层级，自动避开隐藏弹窗标题；默认 JS 精确点击（快），需要严格可操作性检查时传 `native=True`）、
     `open_split_add_dropdown(page)`（真实 hover 展开「新增▾」类下拉并点首项，如子表「导入 Excel」）、
     `dump_visible_dialogs(page)`（只读可见弹窗文本，替代整页 innerText）。
   - `find_page(ctx, url_contains, title_contains)` / `connect(cdp_url, url_contains=..., title_contains=...)`：连常驻浏览器并优先复用已有页面；

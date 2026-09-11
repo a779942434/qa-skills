@@ -851,17 +851,37 @@ def _describe_element(loc):
         return "?"
 
 
-def click_visible_text(page, text, roles=None, timeout=3000):
+def _click_and_describe(loc, timeout=3000, native=False):
+    """点击已定位元素并返回其 '<TAG>.<class>' 描述（默认一次往返完成）。
+
+    native=False（默认）：浏览器内 `e.click()` —— 实测约 3ms，不要求元素进入视口，
+      与本技能此前的点击行为一致；因元素已由 role/text 精确定位，不需要再遍历 DOM。
+    native=True：Playwright `click()` —— 实测约 39ms，带滚动 / 稳定性双帧校验 /
+      可接收事件检查，更接近真人操作；元素被遮挡或需滚动进视口时才建议开启。
+    """
+    if native:
+        loc.click(timeout=timeout)
+        return _describe_element(loc)
+    return loc.evaluate(
+        "e => { const d = e.tagName + '.' + String(e.className || '').slice(0, 60);"
+        " e.click(); return d; }"
+    )
+
+
+def click_visible_text(page, text, roles=None, timeout=3000, native=False):
     """点击页面【可见】的精确文本元素，按「语义 → 文本 → JS」逐级降级。
 
     降级链（locator fallback ladder）：
-      1) role      Playwright 语义定位 get_by_role —— 最稳，且走原生可操作性检查；
-      2) text      Playwright 精确文本 get_by_text(exact) —— 仍走原生检查；
+      1) role      Playwright 语义定位 get_by_role —— 最稳；
+      2) text      Playwright 精确文本 get_by_text(exact)；
       3) js-text   JS 兜底：全 DOM 找可见叶子、向上找可点容器后 click（原实现）。
+
+    点击方式由 `native` 决定（性能差异大，详见 _click_and_describe）：
+      native=False（默认）约 3ms 的 JS 精确点击；native=True 走 Playwright 原生 click（约 39ms）。
 
     背景：盲操作（无截图视觉）时，Playwright `text=` 常命中隐藏弹窗标题（如
     el-dialog__title「新增/编辑/日志」）导致点击超时；但部分站点组件又缺语义 role，
-    只能靠 JS 兜底。分层后既保留稳定性，也保留最后的可用性。
+    只能靠 JS 兜底。分层后既保留定位精度，也保留最后的可用性。
 
     返回 dict：{"ok": True, "via": "role:button"|"text"|"js-text", "on": "<TAG>.<class>"}
     失败返回：{"ok": False, "via": "...", "why": "..."}
@@ -869,24 +889,23 @@ def click_visible_text(page, text, roles=None, timeout=3000):
     """
     roles = list(roles or _ROLE_CANDIDATES)
 
-    # 1) 语义 role 定位（最稳，且使用 Playwright 原生可操作性检查）
+    # 1) 语义 role 定位
+    # 直接用 is_visible() 判定存在性：不存在的元素同样返回 False，
+    # 省掉一次 count() 往返（这是每次调用最常走的路径，值得省）。
     for role in roles:
         try:
-            loc = page.get_by_role(role, name=text, exact=True)
-            if not loc.count():
-                continue
-            first = loc.first
+            first = page.get_by_role(role, name=text, exact=True).first
             if not first.is_visible():
                 continue
-            try:
-                first.click(timeout=timeout)
-                return {"ok": True, "via": "role:%s" % role, "on": _describe_element(first)}
-            except Exception:
-                # 已找到「可见的语义目标」却点不动（多为被遮挡/动画中）——
-                # 再试其它 role 无意义，直接降级到 text，避免 10+ 次超时累积
-                break
         except Exception:
             continue
+        try:
+            on = _click_and_describe(first, timeout=timeout, native=native)
+            return {"ok": True, "via": "role:%s" % role, "on": on}
+        except Exception:
+            # 已找到「可见的语义目标」却点不动（多为元素被 detach）——
+            # 再试其它 role 无意义，直接降级，避免 10+ 次超时累积
+            break
 
     # 2) Playwright 精确文本（可见才点，避免命中隐藏弹窗标题）
     try:
@@ -895,8 +914,8 @@ def click_visible_text(page, text, roles=None, timeout=3000):
             el = loc.nth(i)
             try:
                 if el.is_visible():
-                    el.click(timeout=timeout)
-                    return {"ok": True, "via": "text", "on": _describe_element(el)}
+                    on = _click_and_describe(el, timeout=timeout, native=native)
+                    return {"ok": True, "via": "text", "on": on}
             except Exception:
                 continue
     except Exception:

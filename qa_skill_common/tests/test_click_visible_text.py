@@ -1,10 +1,14 @@
 # -*- coding: utf-8 -*-
 """L1 离线单测：click_visible_text 的三级降级链。
 
-对应 locator fallback ladder：
+降级链（locator fallback ladder）：
   1) role     Playwright 语义定位 get_by_role
   2) text     Playwright 精确文本 get_by_text
   3) js-text  JS 兜底（原实现：可见叶子 + 向上找可点容器）
+
+点击方式（性能关键）：
+  默认   浏览器内 e.click()  —— 实测约 3ms（role 已精确定位，无需遍历 DOM）
+  native=True  Playwright click() —— 实测约 39ms，带滚动/稳定性/可接收事件检查
 
 用假 Locator 模拟 Playwright API，不依赖浏览器与网络。
 """
@@ -23,13 +27,16 @@ class FakeLocator:
     """模拟 Playwright Locator（只实现被测代码用到的部分）。"""
 
     def __init__(self, exists=True, visible=True, tag="BUTTON", cls="btn",
-                 click_raises=None):
+                 click_raises=None, evaluate_raises=None):
         self.exists = exists
         self.visible = visible
         self.tag = tag
         self.cls = cls
         self.click_raises = click_raises
-        self.clicks = 0
+        self.evaluate_raises = evaluate_raises
+        self.native_clicks = 0     # Playwright click() 次数
+        self.js_clicks = 0         # 浏览器内 e.click() 次数
+        self.describes = 0
 
     def count(self):
         return 1 if self.exists else 0
@@ -42,14 +49,22 @@ class FakeLocator:
         return self
 
     def is_visible(self):
-        return self.visible
+        # 不存在 = 不可见（真实 Playwright 行为，也是被测代码依赖的语义）
+        return self.visible and self.exists
 
     def click(self, **kw):
-        self.clicks += 1
+        self.native_clicks += 1
         if self.click_raises:
             raise RuntimeError(self.click_raises)
 
     def evaluate(self, expr):
+        """含 click() 的表达式视作「JS 点击」，否则视作「取描述」。"""
+        if "click()" in expr:
+            self.js_clicks += 1
+            if self.evaluate_raises:
+                raise RuntimeError(self.evaluate_raises)
+        else:
+            self.describes += 1
         return "%s.%s" % (self.tag, self.cls)
 
 
@@ -90,7 +105,7 @@ class TestFallbackLadder(unittest.TestCase):
         r = H.click_visible_text(p, "新增")
         self.assertTrue(r["ok"])
         self.assertEqual(r["via"], "role:button")
-        self.assertEqual(loc.clicks, 1)
+        self.assertEqual(loc.js_clicks, 1)
         self.assertEqual(p.text_queries, [])
         self.assertEqual(p.js_calls, [])
 
@@ -139,7 +154,7 @@ class TestFallbackLadder(unittest.TestCase):
 
     def test_role_click_failure_degrades_to_text(self):
         """role 找到可见目标但点不动时，应直接降级，而不是继续试其它 role。"""
-        p = FakePage(roles={"button": FakeLocator(click_raises="not clickable")},
+        p = FakePage(roles={"button": FakeLocator(evaluate_raises="detached")},
                      text=FakeLocator(tag="DIV", cls="fallback"))
         r = H.click_visible_text(p, "X")
         self.assertEqual(r["via"], "text")
@@ -151,6 +166,34 @@ class TestFallbackLadder(unittest.TestCase):
         r = H.click_visible_text(p, "编辑", roles=["menuitem"])
         self.assertEqual(r["via"], "role:menuitem")
         self.assertEqual(p.role_queries, ["menuitem"])
+
+
+class TestClickMode(unittest.TestCase):
+    """默认走 JS 点击（快）；native=True 走 Playwright click（慢但带可操作性检查）。"""
+
+    def test_default_uses_js_click(self):
+        loc = FakeLocator()
+        p = FakePage(roles={"button": loc})
+        H.click_visible_text(p, "新增")
+        self.assertEqual(loc.js_clicks, 1)
+        self.assertEqual(loc.native_clicks, 0)
+
+    def test_native_uses_playwright_click(self):
+        loc = FakeLocator()
+        p = FakePage(roles={"button": loc})
+        r = H.click_visible_text(p, "新增", native=True)
+        self.assertEqual(loc.native_clicks, 1)
+        self.assertEqual(loc.js_clicks, 0)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["via"], "role:button")
+
+    def test_default_message_contains_click_in_one_roundtrip(self):
+        """默认路径应是「一次 evaluate 内既点击又取描述」。"""
+        loc = FakeLocator(tag="BUTTON", cls="primary")
+        p = FakePage(roles={"button": loc})
+        r = H.click_visible_text(p, "新增")
+        self.assertEqual(loc.js_clicks, 1)
+        self.assertEqual(r["on"], "BUTTON.primary")
 
 
 class TestBackwardCompat(unittest.TestCase):
