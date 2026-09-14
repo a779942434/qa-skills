@@ -7,9 +7,11 @@
 3. 用例漏报错 -> attach_error_watchers() 三路错误监听（console / HTTP / toast）
 4. 截图命名无意义 -> snap() 语义化命名（功能_用例_步骤_时间.png）
 5. 误动已有数据 -> record_baseline() / assert_new_target() 数据基线
+6. 隐藏页签/旧弹窗导致 30s 超时 -> active_pane()/dialog_by_title()/safe_click()/wait_result_or_closed()
 
 用法示例见 web-blackbox-testing.md。
 """
+import json
 import os
 import re
 import shutil
@@ -36,6 +38,10 @@ __all__ = [
     # 2026-09-10 条件等待（替代固定 sleep，提速）
     "wait_any", "wait_gone", "wait_app_ready",
     "wait_dialog_open", "wait_dialog_closed", "wait_table_ready",
+    # 2026-09-14 防超时/作用域/失败现场（本次实测固化）
+    "configure_page_timeouts", "active_pane", "dialog_by_title", "safe_click",
+    "wait_result_or_closed", "select_dropdown_option", "capture_failure_context",
+    "assert_control_type", "select_cascader_values", "wait_dropdown_closed",
 ]
 
 
@@ -248,6 +254,242 @@ def wait_dialog_open(page, timeout=8):
 def wait_dialog_closed(page, timeout=8):
     """等弹窗全部关闭（替代点「确定/取消」后的固定 sleep）。"""
     return wait_gone(page, "[role=dialog]:visible, .el-dialog:visible, .el-message-box:visible", timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-14 防超时 / 作用域 / 失败现场
+# 背景：多页签时全局 locator 会命中隐藏 tab 的同名表单；弹窗/下拉会 teleport；
+# 导入成功常自动关闭弹窗，脚本若继续读旧 locator 会白等 30s。
+# ---------------------------------------------------------------------------
+
+def configure_page_timeouts(page, action_ms=5000, navigation_ms=15000):
+    """设置分层默认超时：普通动作短超时、导航稍长，避免每次失败白等 30s。
+
+    - action_ms：click/fill/read 等普通动作
+    - navigation_ms：goto/reload 等导航
+    长任务（导入/下载）应在具体等待函数里单独传更长 timeout。
+    """
+    try:
+        page.set_default_timeout(int(action_ms))
+    except Exception:
+        pass
+    try:
+        page.set_default_navigation_timeout(int(navigation_ms))
+    except Exception:
+        pass
+    return {"action_ms": int(action_ms), "navigation_ms": int(navigation_ms)}
+
+
+def active_pane(page, selector=".el-tab-pane:visible"):
+    """返回当前最后一个可见页签面板；无页签时回退 body。
+
+    多页签页面必须用它给字段/表格操作限定作用域，禁止全局 `.el-form-item` 取 first，
+    否则很容易命中隐藏页签里 width=0 的同名字段。
+    """
+    try:
+        panes = page.locator(selector)
+        n = panes.count()
+        if n > 0:
+            return panes.nth(n - 1)
+    except Exception:
+        pass
+    return page.locator("body")
+
+
+def dialog_by_title(page, title=None, timeout=0):
+    """返回当前可见弹窗 Locator；传 title 时按 aria-label/标题精确定位。
+
+    `title=None` 时返回最后一个可见 overlay dialog，适合关闭/诊断；
+    精确 title 适合保存、导入等操作，避免命中日期选择器或其他隐藏弹窗。
+    未找到返回 None。
+    """
+    deadline = time.time() + max(float(timeout or 0), 0)
+    while True:
+        selectors = []
+        if title:
+            t = json.dumps(str(title), ensure_ascii=False)
+            selectors = [
+                f'.el-overlay-dialog:visible[aria-label={t}]',
+                f'[role="dialog"]:visible[aria-label={t}]',
+                f'.el-dialog:visible:has(.el-dialog__title:text-is({t}))',
+                f'.el-message-box:visible:has(.el-message-box__title:text-is({t}))',
+            ]
+        else:
+            selectors = ['.el-overlay-dialog:visible', '.el-dialog:visible', '.el-message-box:visible']
+        for sel in selectors:
+            try:
+                loc = page.locator(sel)
+                n = loc.count()
+                if n > 0:
+                    return loc.nth(n - 1)
+            except Exception:
+                continue
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.2)
+
+
+def safe_click(locator, timeout=5, require_enabled=True, description=""):
+    """短超时、可见/可点击前置判断的结构化点击；不抛长超时异常。
+
+    返回 {ok, reason, description}。调用方用 `ok` 决定继续、跳过或记录阻塞。
+    """
+    ms = int(float(timeout) * 1000)
+    try:
+        locator.wait_for(state="visible", timeout=ms)
+    except Exception as exc:
+        return {"ok": False, "reason": "not_visible", "description": description, "error": str(exc)[:200]}
+    if require_enabled:
+        try:
+            if locator.is_disabled(timeout=min(ms, 1500)):
+                return {"ok": False, "reason": "disabled", "description": description}
+        except Exception:
+            pass
+    try:
+        locator.click(timeout=ms)
+        return {"ok": True, "reason": "clicked", "description": description}
+    except Exception as exc:
+        return {"ok": False, "reason": "click_failed", "description": description, "error": str(exc)[:200]}
+
+
+def wait_result_or_closed(page, dialog=None, keywords=None, timeout=30, interval=0.3):
+    """等待弹窗出现结果文本或关闭，解决导入/保存“成功自动关闭”的不确定分支。
+
+    返回 {status: result|closed|timeout, matched, text, elapsed}。
+    典型用法：
+        result = wait_result_or_closed(page, dialog, ["导入完成", "失败", "已存在"])
+        if result["status"] == "closed": ...
+    """
+    kws = list(keywords or ("导入完成", "成功", "失败", "已存在", "不允许", "错误"))
+    start = time.time()
+    dlg = dialog
+    while time.time() - start < timeout:
+        if dlg is None:
+            dlg = dialog_by_title(page)
+            if dlg is None:
+                return {"status": "closed", "matched": None, "text": "", "elapsed": time.time() - start}
+        try:
+            if dlg.count() == 0 or not dlg.is_visible():
+                return {"status": "closed", "matched": None, "text": "", "elapsed": time.time() - start}
+            text = (dlg.inner_text(timeout=1000) or "").strip()
+            for kw in kws:
+                if kw in text:
+                    return {"status": "result", "matched": kw, "text": text, "elapsed": time.time() - start}
+        except Exception:
+            return {"status": "closed", "matched": None, "text": "", "elapsed": time.time() - start}
+        time.sleep(interval)
+    try:
+        text = (dlg.inner_text(timeout=1000) or "").strip() if dlg is not None else ""
+    except Exception:
+        text = ""
+    return {"status": "timeout", "matched": None, "text": text, "elapsed": time.time() - start}
+
+
+def select_dropdown_option(page, trigger, option_text=None, query=None, pick_first=False,
+                           timeout=5, allow_partial=True):
+    """Element Plus 下拉的稳健选择：锁定 popper、支持搜索、选后回读。
+
+    - trigger 可以是表单项 `.el-form-item`，也可以是 `.el-select`
+    - query：输入搜索词；option_text：目标选项文本
+    - pick_first=False 且匹配不到时直接失败，避免悄悄选错首项
+    返回 {ok, reason, selected, options}
+    """
+    ms = int(float(timeout) * 1000)
+    select = trigger
+    try:
+        inner = trigger.locator(".el-select")
+        if inner.count() > 0:
+            select = inner.first
+    except Exception:
+        pass
+    try:
+        select.wait_for(state="visible", timeout=ms)
+        select.click(force=True, timeout=ms)
+    except Exception as exc:
+        return {"ok": False, "reason": "open_failed", "selected": "", "options": [], "error": str(exc)[:200]}
+    if query:
+        try:
+            search = page.locator(".el-select-dropdown:visible input").first
+            if search.count() > 0:
+                search.click(timeout=ms)
+                try:
+                    search.press("Control+A", timeout=ms)
+                except Exception:
+                    pass
+            page.keyboard.type(str(query), delay=50)
+            page.wait_for_timeout(300)
+        except Exception:
+            pass
+    try:
+        opts = page.locator(".el-select-dropdown:visible .el-select-dropdown__item:not(.is-disabled)")
+        texts = [t.strip() for t in opts.all_inner_texts() if t.strip()]
+        target = None
+        if option_text:
+            needle = str(option_text).strip()
+            for i in range(opts.count()):
+                text = (opts.nth(i).inner_text() or "").strip()
+                if text == needle or (allow_partial and needle in text):
+                    target = opts.nth(i)
+                    break
+        if target is None and pick_first and opts.count() > 0:
+            target = opts.first
+        if target is None:
+            return {"ok": False, "reason": "option_not_found", "selected": "", "options": texts[:20]}
+        target.click(timeout=ms)
+        page.wait_for_timeout(250)
+        selected = ""
+        try:
+            selected = (select.inner_text() or "").strip()
+        except Exception:
+            pass
+        return {"ok": True, "reason": "selected", "selected": selected, "options": texts[:20]}
+    except Exception as exc:
+        return {"ok": False, "reason": "select_failed", "selected": "", "options": [], "error": str(exc)[:200]}
+
+
+def capture_failure_context(page, out_dir, name, feature="", extra=None, max_dialog_len=1800):
+    """一次性捕获失败现场：截图 + JSON（URL/反馈/弹窗/浮层/activity）。
+
+    失败时调用一次即可，避免后续重复 dump 和 30s 重试。返回 {screenshot,json,context}。
+    """
+    ctx = {
+        "url": getattr(page, "url", ""),
+        "title": "",
+        "feedback": {},
+        "visible_dialogs": [],
+        "counts": {},
+        "extra": extra or {},
+    }
+    try:
+        ctx["title"] = page.title()
+    except Exception:
+        pass
+    try:
+        ctx["feedback"] = read_feedback(page)
+    except Exception:
+        pass
+    try:
+        ctx["visible_dialogs"] = dump_visible_dialogs(page, max_len=max_dialog_len)
+    except Exception:
+        pass
+    for key, selector in (
+        ("overlay_dialogs", ".el-overlay-dialog:visible"),
+        ("dialogs", ".el-dialog:visible"),
+        ("select_dropdowns", ".el-select-dropdown:visible"),
+        ("cascaders", ".el-cascader-dropdown:visible"),
+        ("date_pickers", ".el-picker-panel:visible"),
+    ):
+        try:
+            ctx["counts"][key] = page.locator(selector).count()
+        except Exception:
+            ctx["counts"][key] = None
+    try:
+        shot = snap(page, name, out_dir, feature=feature)
+        json_path = str(Path(shot).with_suffix(".json"))
+        Path(json_path).write_text(json.dumps(ctx, ensure_ascii=False, indent=2), encoding="utf-8")
+        return {"screenshot": shot, "json": json_path, "context": ctx}
+    except Exception:
+        return {"screenshot": "", "json": "", "context": ctx}
 
 
 def wait_table_ready(page, timeout=15, min_rows=1):
@@ -1156,3 +1398,163 @@ if __name__ == "__main__":
     print("  防误报&隔离: read_feedback / active_dialog / read_dialog / judge_action")
     print("  级联&禁用: detect_cascade / select_cascade / click_or_observe / reset_to")
     print("  无视觉/盲操作(2026-09-07): click_visible_text / open_split_add_dropdown / dump_visible_dialogs")
+    print("  防超时/作用域(2026-09-14): configure_page_timeouts / active_pane / dialog_by_title / safe_click")
+    print("    wait_result_or_closed / select_dropdown_option / capture_failure_context")
+    print("    assert_control_type / select_cascader_values / wait_dropdown_closed")
+
+
+def wait_dropdown_closed(page, timeout=5, selectors=None):
+    """等待选择器/级联/日期浮层关闭，确认选择已提交。"""
+    selector = selectors or (
+        ".el-select-dropdown:visible, .el-cascader-dropdown:visible, "
+        ".el-cascader__dropdown:visible, .el-picker-panel:visible"
+    )
+    deadline = time.time() + max(float(timeout), 0)
+    while time.time() < deadline:
+        try:
+            if page.locator(selector).count() == 0:
+                return True
+        except Exception:
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _control_type(locator):
+    """识别常见 Element Plus 控件类型；返回值同时给出可读 details。"""
+    details = {}
+    try:
+        tag = str(locator.evaluate("e => e.tagName.toLowerCase()") or "").lower()
+    except Exception:
+        tag = ""
+    for key, selector in (
+        ("cascader", ".el-cascader"),
+        ("select", ".el-select"),
+        ("date", ".el-date-editor"),
+        ("checkbox", "input[type=checkbox]"),
+        ("textarea", "textarea"),
+    ):
+        try:
+            if locator.locator(selector).count() > 0:
+                details["container_tag"] = tag
+                details["matched"] = selector
+                return key, details
+        except Exception:
+            pass
+    try:
+        if tag == "input":
+            typ = (locator.get_attribute("type") or "text").lower()
+            readonly = locator.get_attribute("readonly") is not None
+            details.update({"tag": tag, "input_type": typ, "readonly": readonly})
+            return ("readonly" if readonly else ("date" if typ in ("date", "datetime-local") else "input")), details
+        if tag in ("textarea",):
+            return "textarea", {"tag": tag}
+    except Exception:
+        pass
+    for key, selector in (("input", "input:not([type=hidden])"), ("textarea", "textarea")):
+        try:
+            items = locator.locator(selector)
+            if items.count() > 0:
+                inp = items.first
+                typ = (inp.get_attribute("type") or "text").lower()
+                readonly = inp.get_attribute("readonly") is not None
+                details.update({"tag": tag, "input_type": typ, "readonly": readonly})
+                return ("readonly" if readonly else ("date" if typ in ("date", "datetime-local") else "input")), details
+        except Exception:
+            continue
+    return (tag or "unknown"), details
+
+
+def assert_control_type(locator, expected, timeout=3):
+    """断言真实控件类型/录入方式，避免“值能填进去”掩盖错误控件。
+
+    expected 支持：input/text/手动输入、select/下拉、cascader/级联、
+    readonly/只读、date/日期、checkbox、textarea。
+    返回 {ok, expected, actual, reason, details}。
+    """
+    aliases = {
+        "input": "input", "text": "input", "textbox": "input", "手动输入": "input", "文本框": "input",
+        "select": "select", "dropdown": "select", "下拉": "select", "下拉选择": "select",
+        "cascader": "cascader", "级联": "cascader", "级联选择": "cascader",
+        "readonly": "readonly", "只读": "readonly",
+        "date": "date", "日期": "date", "日期选择": "date",
+        "checkbox": "checkbox", "复选框": "checkbox",
+        "textarea": "textarea", "多行文本": "textarea",
+    }
+    exp = aliases.get(str(expected).strip().lower(), str(expected).strip().lower())
+    try:
+        locator.wait_for(state="visible", timeout=int(float(timeout) * 1000))
+    except Exception as exc:
+        return {"ok": False, "expected": exp, "actual": "not_visible", "reason": "not_visible",
+                "details": {"error": str(exc)[:200]}}
+    actual, details = _control_type(locator)
+    ok = actual == exp
+    return {
+        "ok": ok,
+        "expected": exp,
+        "actual": actual,
+        "reason": "matched" if ok else "control_type_mismatch",
+        "details": details,
+    }
+
+
+def select_cascader_values(page, trigger, values, confirm=True, timeout=5, require_all=True):
+    """选择级联叶节点；多选级联提交后回读 tag 值。
+
+    values 可为单个字符串或字符串列表。级联多选通常必须先选节点，再点浮层“确定”。
+    返回 {ok, selected, expected, reason}。
+    """
+    values = [values] if isinstance(values, str) else list(values or [])
+    ms = int(float(timeout) * 1000)
+    root = trigger
+    try:
+        inner = trigger.locator(".el-cascader")
+        if inner.count() > 0:
+            root = inner.first
+    except Exception:
+        pass
+    try:
+        root.click(force=True, timeout=ms)
+    except Exception as exc:
+        return {"ok": False, "selected": [], "expected": values, "reason": "open_failed", "error": str(exc)[:200]}
+    for value in values:
+        try:
+            if page.locator(".el-cascader-dropdown:visible, .el-cascader__dropdown:visible").count() == 0:
+                root.click(force=True, timeout=ms)
+            node = page.locator(".el-cascader-node:visible", has_text=str(value)).first
+            node.wait_for(state="visible", timeout=ms)
+            checkbox = node.locator(".el-checkbox")
+            if checkbox.count() > 0:
+                checkbox.first.click(timeout=ms)
+            else:
+                node.click(timeout=ms)
+            page.wait_for_timeout(200)
+        except Exception as exc:
+            return {"ok": False, "selected": [], "expected": values,
+                    "reason": f"node_not_found:{value}", "error": str(exc)[:200]}
+    if confirm:
+        popper = page.locator(".el-cascader-dropdown:visible, .el-cascader__dropdown:visible, .el-popper:visible").last
+        button = popper.locator("button", has_text="确定").last
+        if button.count() == 0:
+            return {"ok": False, "selected": [], "expected": values, "reason": "confirm_not_found"}
+        try:
+            button.click(timeout=ms)
+            page.wait_for_timeout(250)
+        except Exception as exc:
+            return {"ok": False, "selected": [], "expected": values,
+                    "reason": "confirm_failed", "error": str(exc)[:200]}
+    wait_dropdown_closed(page, timeout=min(float(timeout), 3))
+    try:
+        selected = [t.strip() for t in root.locator(".el-tag").all_inner_texts() if t.strip()]
+        if not selected:
+            try:
+                selected = [root.locator("input").first.input_value().strip()]
+            except Exception:
+                selected = []
+    except Exception:
+        selected = []
+    joined = " ".join(selected)
+    missing = [v for v in values if v not in joined]
+    ok = not missing if require_all else bool(selected)
+    return {"ok": ok, "selected": selected, "expected": values,
+            "reason": "selected" if ok else f"missing:{missing}"}

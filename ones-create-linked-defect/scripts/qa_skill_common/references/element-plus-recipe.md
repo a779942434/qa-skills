@@ -62,6 +62,9 @@ click_dropdown_item(page, "导入")
 | 需求点 | 推荐断言 |
 | --- | --- |
 | 字段存在 | 表头/表单项 label 命中 |
+| 控件类型/录入方式 | 需求“手动输入”必须断言 text input；不能因通过下拉也填入了值就判通过 |
+| 下拉选择 | 默认用 `select_dropdown_option`；目标不存在时不得回退选首项 |
+| 级联多选 | 选叶节点后点浮层“确定”，再断言 tag 数量和值已回填 |
 | 必填 | **空表单提交** → 该项出现 `.el-form-item__error`（如「必填项」），且弹窗不关闭 |
 | 单选 | 连续选 2 个值 → 只保留最后 1 个 |
 | 多选 | 连续选 2 个值 → 两个都保留（含折叠「+N」） |
@@ -83,6 +86,12 @@ click_dropdown_item(page, "导入")
 | `ensure_login(page, target_url)` | 已登录则跳过登录（不重复走登录流程） |
 | `goto_feature(page, name)` | 按功能名直达；**命中缓存时直接跳转**（重复访问同一功能 ~2s） |
 | `session(base_url=...)`（`session_helpers`） | 一次会话上下文：起/连浏览器 + 登录 + 收尾，脚本不用重复样板 |
+| `configure_page_timeouts(page)` | 普通动作 5s、导航 15s，避免每个定位错误白等 30s |
+| `active_pane(page)` | 锁定当前可见页签面板，避免命中隐藏 tab 同名字段 |
+| `dialog_by_title(page, "新增")` | 按弹窗标题精确定位 overlay |
+| `safe_click(locator)` | 可见/disabled 前置判断的短超时结构化点击 |
+| `wait_result_or_closed(...)` | 同时等待弹窗出现结果或自动关闭 |
+| `capture_failure_context(...)` | 失败时一次捕获截图、反馈、浮层和页面上下文 |
 
 用法：
 ```python

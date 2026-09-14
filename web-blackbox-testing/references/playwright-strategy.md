@@ -26,6 +26,40 @@
 
 点击前先判禁用：用 bbt_helpers.click_or_observe(page, 按钮文本)——按钮 disabled 时返回 (disabled, ...) 记状态观察，避免对 disabled 按钮 click 超时中断整段（勾选态被清、按钮回落 disabled 的场景）。
 
+## 防超时与作用域硬化（2026-09-14 增补）
+
+本次实测出现大量 `Locator.click/inner_text Timeout 30000ms`，根因不是页面慢，而是脚本命中了隐藏页签、旧弹窗、teleport 浮层或已关闭的 dialog。后续脚本必须遵守：
+
+1. **页签作用域**：多页签页面先用 `active_pane(page)`，所有字段、表格、按钮操作都限定在该 Locator 内；禁止全局 `.el-form-item.first`。隐藏 tab 中同名字段常见 `width=0`，点击会等满默认超时。
+2. **弹窗作用域**：新增/编辑/导入弹窗用 `dialog_by_title(page, "<标题>")`；不要混用 `.el-dialog:visible`、`.el-overlay-dialog` 和全局按钮。Element Plus 的 select/cascader/date popper 会 teleport，下拉选项只在对应 popper 内查找。
+3. **结果状态等待**：保存/导入等操作不要假设弹窗一定关闭。用 `wait_result_or_closed(page, dialog, ["导入完成","失败","已存在"])`，同时处理“结果文本出现”和“弹窗关闭”两种分支。操作后禁止继续读取已 detach 的旧 dialog locator。
+4. **分层短超时**：会话启动后调用 `configure_page_timeouts(page)`，普通动作默认 5 秒、导航 15 秒；长任务单独传 30–60 秒。不要让每个定位错误都拖满 30 秒。
+5. **选择组件严格校验**：下拉用 `select_dropdown_option`，搜索不到目标时不要自动选首项；级联多选用 `select_cascader_values` 选叶并点浮层“确定”，随后断言 tag/value 已回填；控件形态用 `assert_control_type` 单独断言。
+6. **失败快停与现场捕获**：定位/状态失败时调用一次 `capture_failure_context(page, out_dir, name, feature=...)`，记录 URL、activity、toast、内联错误、可见 dialog/popper 数量和截图，然后记「阻塞/环境观察」，不要反复重试同一错误 locator。
+7. **严格定位优先**：能用标题、label、role 精确定位时不要用 `.first` 掩盖多匹配；多匹配应视为脚本问题，先限定作用域。
+
+推荐动作链：
+
+```python
+configure_page_timeouts(page)
+pane = active_pane(page)
+safe_click(pane.get_by_role("button", name="新增"), timeout=5)
+dlg = dialog_by_title(page, "新增")
+sel = select_dropdown_option(page, pane.locator(".el-form-item", has_text="产品"), option_text="产品A")
+result = wait_result_or_closed(page, dlg, ["成功", "失败", "已存在"])
+```
+
+## 分阶段恢复与单登录（2026-09-14 增补）
+
+长任务不得因一次定位错误重新登录、从第一条用例重跑。总入口采用：
+
+1. **持久会话**：MES 使用独立用户数据目录和 CDP 9222；ONES 继续使用 9334，互不干扰。已有会话优先复用。
+2. **阶段顺序**：`bootstrap → recon → data-setup → core-flow → exceptions → non-core → finalize`；阶段间用 `depends_on` 声明依赖。
+3. **检查点粒度**：每条用例结束写 `run_state.json`；业务单号、生成单据等写 `data_ledger.json`。二者不得包含密码、Cookie、Token。
+4. **恢复策略**：`--resume` 跳过“通过”用例，只重跑失败、阻塞和未执行项；阶段依赖未通过时，后续阶段记为阻塞，不编造结果。
+5. **失败分级**：`InfrastructureAbort`、Playwright Timeout、连接异常属于基础异常，保存现场后停止当前阶段；业务断言失败记录后继续。
+6. **会话收尾**：全部正常完成才关闭本轮启动的持久浏览器；用户中断或基础异常阻塞时保留会话，供 `--resume` 继续。
+
 ## 脚本与执行约定
 
 1. 浏览器自动化统一用本机 Python Playwright 脚本（UTF-8，写成 `.py` 文件执行）

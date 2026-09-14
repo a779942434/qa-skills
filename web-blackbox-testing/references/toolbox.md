@@ -22,6 +22,7 @@
   - `table_columns()` / `read_table_rows()`：按列头读表格；
   - `snap(page, name, out_dir, feature)`：语义化截图命名；
   - `record_baseline()` / `assert_new_target()`：数据基线记录与核对。
+  - **防超时/作用域（2026-09-14 新增）**：`configure_page_timeouts(page)` 分层默认超时；`active_pane(page)` 锁定可见页签；`dialog_by_title(page,"新增")` 精确定位弹窗；`safe_click(...)` 短超时结构化点击；`wait_result_or_closed(...)` 同时等待结果或弹窗关闭；`select_dropdown_option(...)` 锁定 popper 搜索选择；`capture_failure_context(...)` 一次捕获截图+活动区/浮层/反馈 JSON；`assert_control_type(...)` 断言真实控件类型；`select_cascader_values(...)` 级联选叶并提交；`wait_dropdown_closed(...)` 确认选择浮层已关闭。
   - **防误报/隔离（2026-09-03 新增）**：`read_feedback(page)`（toast+内联错误+可见dialog）、`active_dialog/read_dialog`（作用域读弹窗）、`judge_action(page,action,...)`（多信号判定，`processed=False` 且 reason=silent 才视为无反馈）、`detect_cascade/select_cascade`（**先侦测两级父→子、匹配才走**级联）、`click_or_observe`（先判 disabled，禁用作状态观察）、`reset_to(page,url,页签)`（用例隔离回已知态）。详细用法见 references/playwright-strategy.md。
 - 组件指纹 / 结构对比 / 自愈定位（2026-09-11 新增，实现见 `qa_skill_common/fingerprint.py`）：
   - `recon_page.py --url <URL> --probe`：组件指纹探针（class 前缀分布 + 组件库判定，只读）；
@@ -36,11 +37,10 @@
   - `snapshot()`：操作前取响应基线；`wait_new(base, keyword=None, timeout=15)`：等基线之后出现新响应（可用 URL 关键词缩小范围）；
   - `confirm_action(page, action, keyword=None)`：统一操作判定（执行操作→等新接口→收集 HTTP≥400 与 toast→返回 ok/errors），失败原因可直接进缺陷清单；
   - 业务不同无需预知接口路径，靠基线对比动态识别；无新响应 = 操作未生效。
-- `scripts/session_helpers.py`：一次会话常驻浏览器助手。
-- `scripts/run_all_template.py`：**总入口长脚本模板（B5/B6）**——一个任务一个后台会话一次登录跑完全部用例；
-  复制改名为 run_all.py 后按任务改 CONFIG/CASES 即可，建议一次提权批准该总入口（prefix 如 `python3 <run>/run_all.py`）。
-  - `launch_session(headless, cdp_port)`：启动新 Chromium（可暴露 CDP 端口）；`connect_session(cdp_url, url_contains)`：连接常驻浏览器并复用已有页面；
-  - `close_session(...)`：收尾清理标签页；约定一个会话一个持有者。
+- `scripts/session_helpers.py`：一次会话常驻浏览器助手。新增 `start_persistent_session` / `connect_persistent_session` / `ensure_mes_session` / `stop_persistent_session`，默认使用仓库外用户数据目录和 CDP 9222。
+- `scripts/run_all_template.py`：**分阶段可恢复总入口**——一个任务一个持久会话、一次登录；支持 `--resume`、`--phase <id>`、`--connect`。
+  - 每用例写 `run_state.json`，测试数据写 `data_ledger.json`；基础异常快停、业务失败继续。
+  - 底层运行器见根公共包 `qa_skill_common/phase_runner.py`；旧 `CASES` 写法仍可用。
 - `scripts/report_gen.py`：报告/缺陷清单骨架生成（`gen_report` / `gen_bug`），执行脚本直接喂结果生成 markdown，AI 只补分析。
 - `scripts/data_cleanup.py`：数据基线对比与清理留痕（`compare_state` / `write_cleanup_note`）。**按需使用**：测试环境保留造数为主，仅在确需清理时对比基线并记录已保留/已恢复（遵循必守 C（结束闸门））。
 - `scripts/ipc_helpers.py`：IPC 单机/产线界面导航辅助。

@@ -28,11 +28,12 @@ description: >-
 
 > 依赖只装 Python 包：`pip install playwright pyyaml`（**不要** `playwright install`）。
 
-## 高频坑速查（三条最贵的）
+## 高频坑速查（四条最贵的）
 
 1. **新站点先适配再动手**：先跑组件指纹探针（`recon_page.py --probe`，一次给出组件库判定与未知前缀）与登录形态；不同就换选择器/登录，不套旧站点。入口优先用**全局搜索按功能名直达**，不走菜单逐级点。
 2. **盲点按钮/隐藏弹窗是高频误点源**：点击用 `bbt_helpers.click_visible_text`；「新增▾」类下拉用 `open_split_add_dropdown`；读弹窗用 `dump_visible_dialogs`。
 3. **页面改版先看差异再动手**：固化过的页面改版后先跑 `recon_page.py --url <URL> --diff <指纹名>` 看「消失 / 变化 / 新增」，只改受影响的部分；选择器失效时 `click_visible_text(page, text, heal="<指纹名>")` 可自愈，不必重新全量侦察。
+4. **多页签/弹窗先限定作用域，失败快停**：页签内字段/表格先用 `active_pane(page)`；弹窗按标题用 `dialog_by_title(page, "新增")`，不要全局 `.el-form-item.first`。普通动作超时 3–5 秒，导入/下载才用长等待；失败只抓一次 `capture_failure_context`，禁止反复白等 30 秒。详见 [references/playwright-strategy.md](references/playwright-strategy.md)。
 
 > 执行形态（一次会话一个总入口脚本）、等待基线、无视觉判定等已归入下方「必守清单 B」与「执行形态与等待基线」，此处不重复。
 
@@ -94,9 +95,10 @@ description: >-
 
 ## 执行形态与等待基线
 
-**一个任务 = 一个常驻会话 + 一个总入口长脚本，一次登录串行跑完**；
+**一个任务 = 一个持久会话 + 一次登录 + 分阶段执行 + 检查点恢复**；
 **等待优先级：接口/响应基线等待 > 条件等待 > 固定 sleep（仅 ≤500ms 渲染余量/首次侦察兜底）**。
-细节（总入口模板 `scripts/run_all_template.py`、`api_wait.ApiWatcher`、无视觉断言纪律）见 [references/playwright-strategy.md](references/playwright-strategy.md)。
+总入口 `scripts/run_all_template.py` 默认写入 `run_state.json` / `data_ledger.json`；`--resume` 跳过已通过用例，`--phase <id>` 只跑指定阶段及依赖。基础定位/弹窗异常快停当前阶段并保存现场，业务失败记录后继续。
+细节见 [references/playwright-strategy.md](references/playwright-strategy.md)。
 
 ## 快速分层
 
@@ -151,7 +153,7 @@ description: >-
 涉及导入模板、上传校验、导出一致性时，先读 `references/import-export.md`。
 要点：模板必填标记、页面导入窗口提示、导出字段/日期/精度一致性都要核对。
 导入是否成功必须同时看页面导入窗口和 `linkim-pc/admin-console/simpleExcel/task/findOne`
-的最新返回，二者要一致；导入成功后还需刷新页面数据，再确认是否正确新增 / 覆盖数据。
+的最新返回，二者要一致；导入成功后还需刷新页面数据，再确认是否正确新增或更新；是否允许覆盖必须以需求原文为准。
 
 ## 修复后回归
 
