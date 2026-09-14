@@ -19,6 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from .preflight import PreflightCheck, PreflightRunner
+
 try:  # 未安装 Playwright 时仍可导入本模块做离线测试
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 except Exception:  # pragma: no cover
@@ -94,6 +96,9 @@ class PhaseSpec:
     optional: bool = False
     setup: Callable[["RunContext", Any], None] | None = None
     teardown: Callable[["RunContext", Any], None] | None = None
+    preflight: tuple[PreflightCheck, ...] = ()
+    provides_data: tuple[str, ...] = ()
+    requires_data: tuple[str, ...] = ()
 
 
 @dataclass
@@ -106,8 +111,8 @@ class RunContext:
     def data(self) -> dict:
         return self.state.data
 
-    def set_data(self, key: str, value: Any) -> None:
-        self.state.set_data(key, value)
+    def set_data(self, key: str, value: Any, **kwargs) -> None:
+        self.state.set_data(key, value, **kwargs)
 
 
 def _now() -> str:
@@ -143,6 +148,7 @@ class RunState:
         self.backup_path = self.state_dir / "run_state.json.bak"
         self.ledger_path = self.state_dir / "data_ledger.json"
         self.data = data.get("data", {}) if data else {}
+        self.data_meta = data.get("data_meta", {}) if data else {}
         self.run_id = data.get("run_id", run_id) if data else run_id
         self.feature = data.get("feature", feature) if data else feature
         self.started_at = data.get("started_at", _now()) if data else _now()
@@ -181,6 +187,7 @@ class RunState:
             "phases": self.phases,
             "cases": self.cases,
             "data": self.data,
+            "data_meta": self.data_meta,
             "meta": self.meta,
         }
 
@@ -204,12 +211,60 @@ class RunState:
             "feature": self.feature,
             "updated_at": self.updated_at,
             "records": self.data,
+            "metadata": self.data_meta,
         }
         self.ledger_path.write_text(json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def set_data(self, key: str, value: Any) -> None:
+    def set_data(self, key: str, value: Any, validator: Callable[[Any], Any] | None = None,
+                 required: bool = True, note: str = "") -> None:
         self.data[key] = value
+        if validator is not None or required or note:
+            self.data_meta[key] = {
+                "required": bool(required),
+                "validator": getattr(validator, "__name__", type(validator).__name__) if validator else "",
+                "note": note or "",
+            }
         self.save()
+
+    def validate_data(self, validators: dict[str, Callable[[Any], Any]] | None = None) -> dict:
+        """校验业务台账；返回 {ok, checked, invalid, skipped, details}。
+
+        只有注册了 validator 的 key 才会真正执行外部存在性检查；没有 validator 的必填 key
+        记为 skipped，不会伪报失败。
+        """
+        validators = validators or {}
+        keys = set(validators)
+        keys.update(k for k, meta in self.data_meta.items() if meta.get("required", True))
+        result = {"ok": True, "checked": [], "invalid": [], "skipped": [], "details": {}}
+        for key in sorted(keys):
+            if key not in self.data:
+                result["invalid"].append(key)
+                result["details"][key] = {"ok": False, "reason": "台账缺少数据"}
+                continue
+            fn = validators.get(key)
+            if not fn:
+                result["skipped"].append(key)
+                result["details"][key] = {"ok": None, "reason": "未注册 validator"}
+                continue
+            try:
+                raw = fn(self.data[key])
+                if isinstance(raw, dict):
+                    ok = bool(raw.get("ok"))
+                    detail = raw
+                else:
+                    ok = bool(raw)
+                    detail = {"ok": ok}
+            except Exception as exc:
+                ok = False
+                detail = {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
+            result["checked"].append(key)
+            result["details"][key] = detail
+            if not ok:
+                result["invalid"].append(key)
+        result["ok"] = not result["invalid"]
+        self.meta["ledger_validation"] = result
+        self.save()
+        return result
 
     def get_data(self, key: str, default: Any = None) -> Any:
         return self.data.get(key, default)
@@ -287,13 +342,15 @@ class PhaseRunner:
     """按阶段执行 CaseSpec，并在每个用例后落检查点。"""
 
     def __init__(self, page: Any, state: RunState, context: RunContext | None = None,
-                 capture_failure: Callable[..., dict] | None = None, logger: Callable[[str], None] = print):
+                 capture_failure: Callable[..., dict] | None = None, logger: Callable[[str], None] = print,
+                 validators: dict[str, Callable[[Any], Any]] | None = None):
         self.page = page
         self.state = state
         self.context = context or RunContext(state=state, page=page)
         self.context.page = page
         self.capture_failure = capture_failure
         self.log = logger
+        self.validators = validators or {}
 
     def run(self, phases: Iterable[PhaseSpec], resume: bool = False,
             selected_phase: str | None = None) -> dict:
@@ -308,7 +365,16 @@ class PhaseRunner:
         for phase in phase_list:
             if phase.id not in run_set:
                 continue
-            if resume and self.state.phase_status(phase.id) == PASS:
+            ledger = self.state.validate_data(self.validators)
+            invalid_data = set(ledger.get("invalid", []))
+            phase_invalid = bool(set(phase.provides_data) & invalid_data)
+            required_invalid = (set(phase.requires_data) & invalid_data) - set(phase.provides_data)
+            if required_invalid:
+                note = f"数据台账失效: {', '.join(sorted(required_invalid))}"
+                self.state.mark_phase(phase.id, BLOCK, note)
+                self.log(f"[phase:{phase.id}] {BLOCK} {note}")
+                continue
+            if resume and self.state.phase_status(phase.id) == PASS and not phase_invalid:
                 self.log(f"[phase:{phase.id}] 已完成，跳过")
                 continue
             missing = [d for d in phase.depends_on if self.state.phase_status(d) != PASS]
@@ -317,7 +383,7 @@ class PhaseRunner:
                 self.state.mark_phase(phase.id, BLOCK, note)
                 self.log(f"[phase:{phase.id}] {BLOCK} {note}")
                 continue
-            self._run_phase(phase, resume=resume)
+            self._run_phase(phase, resume=resume, force_replay=phase_invalid)
         self.state.save()
         return self.state.summary()
 
@@ -340,8 +406,16 @@ class PhaseRunner:
                 stack.append(dep)
         return required
 
-    def _run_phase(self, phase: PhaseSpec, resume: bool) -> None:
-        self.log(f"[phase:{phase.id}] 开始")
+    def _run_phase(self, phase: PhaseSpec, resume: bool, force_replay: bool = False) -> None:
+        self.log(f"[phase:{phase.id}] 开始" + ("（台账失效，强制重跑）" if force_replay else ""))
+        if phase.preflight:
+            report = PreflightRunner().run(self.page, phase.preflight)
+            self.state.meta.setdefault("preflight", {})[phase.id] = report.to_dict()
+            if not report.ok:
+                self._handle_infrastructure(
+                    phase.id, "preflight", InfrastructureAbort(report.summary()), phase,
+                )
+                return
         if phase.setup:
             try:
                 phase.setup(self.context, self.page)
@@ -350,7 +424,7 @@ class PhaseRunner:
                 return
         blocked = False
         for case in phase.cases:
-            if resume and self.state.case_status(case.id) == PASS:
+            if resume and not force_replay and self.state.case_status(case.id) == PASS:
                 self.log(f"[{case.id}] 已完成，跳过")
                 continue
             missing = [d for d in case.depends_on if self.state.case_status(d) != PASS]
@@ -393,13 +467,20 @@ class PhaseRunner:
         note = f"基础能力异常快停: {type(exc).__name__}: {exc}"
         trace = traceback.format_exc(limit=4)
         if self.capture_failure:
+            context_extras = getattr(self.context, "extras", {}) or {}
+            watcher = context_extras.get("watcher")
+            network_recent = watcher.recent(30) if watcher and hasattr(watcher, "recent") else []
             try:
                 diag = self.capture_failure(
                     page=self.page,
                     name=f"{case_id}_infrastructure",
                     case_id=case_id,
                     error=exc,
-                    extra={"traceback": trace, "phase": phase_id},
+                    extra={
+                        "traceback": trace,
+                        "phase": phase_id,
+                        "network_recent": network_recent,
+                    },
                 )
             except Exception as cap_exc:
                 diag = {"screenshot": "", "json": "", "capture_error": str(cap_exc)}

@@ -4,23 +4,28 @@
 核心思想：页面数据是接口返回后渲染的。不要在操作后直接固定 sleep 或立即读 DOM，
 而是观测页面实际发出的接口，等到"操作触发的业务接口返回"后再断言页面数据。
 
-用法（每个业务不同，无需预知接口路径）：
+推荐模式（动作与接口响应绑定）：
 
     from api_wait import ApiWatcher
-    watcher = ApiWatcher(page)          # 挂 response 监听（覆盖所有 frame）
-    base = watcher.snapshot()           # 操作前记录响应基线
+    watcher = ApiWatcher(page)          # 挂 request/response 监听（覆盖所有 frame）
 
-    click_action(...)                   # 触发操作（切页签/提交/刷卡）
+    new = watcher.wait_action(
+        lambda: page.get_by_role("button", name="查询").click(),
+        url_contains="/plan/",
+        timeout=60,
+    )
+    # 接口返回即继续；timeout 只是异常上限，不表示要等满 60 秒。
 
-    new = watcher.wait_new(base, timeout=15)   # 等出现基线后的新响应
-    # new 非空 = 业务接口已返回；此时再读页面 DOM，通常已渲染
-    page.wait_for_timeout(500)          # 留少量渲染余量（可选）
+也可直接调用：
+    from api_wait import wait_for_response_after_action
+    result = wait_for_response_after_action(page, action, url_contains="/plan/", timeout=60)
 
-可选：wait_new(keyword="plan") 按 URL 关键词过滤（适用于能判断业务前缀的场景，
-如列表接口含 /plan/、提交接口含 /switch/ 等；不确定时不传，等任意新响应）。
+`snapshot()` + `wait_new()` 仅保留给“响应已经发生、只读观察”的兼容场景；
+业务动作完成判定统一优先使用 `wait_action()`。
 """
+import threading
 import time
-__all__ = ["ApiWatcher", "wait_any_api"]
+__all__ = ["ApiWatcher", "wait_any_api", "wait_for_response_after_action"]
 _VALIDATION_HINTS = (
     "必须", "不能", "至少", "不大于", "请选择", "请填写", "不能为", "不允许",
     "超出", "超过", "最少", "最多", "请输入", "不能小于", "必填", "大于0",
@@ -44,20 +49,62 @@ class ApiWatcher:
         self.page = page
         # url_filter: 可选 callable(url)->bool，只记录关心的接口；默认记录全部
         self.url_filter = url_filter or (lambda u: True)
-        self._responses = []  # [{"status": int, "url": str, "t": float}]
+        self._responses = []  # DevTools Network 风格响应记录
+        self._request_started = {}
+        self._event = threading.Event()
+        page.on("request", self._on_request)
         page.on("response", self._on_response)
+
+    @staticmethod
+    def _request_key(request):
+        return (
+            getattr(request, "method", ""),
+            getattr(request, "url", ""),
+            getattr(request, "resource_type", ""),
+        )
+
+    def _on_request(self, request):
+        try:
+            key = self._request_key(request)
+            self._request_started.setdefault(key, []).append(time.time())
+        except Exception:
+            pass
 
     def _on_response(self, resp):
         try:
             url = resp.url
             if self.url_filter(url):
-                self._responses.append({"status": resp.status, "url": url, "t": time.time()})
+                request = resp.request
+                key = self._request_key(request)
+                starts = self._request_started.get(key, [])
+                started = starts.pop(0) if starts else None
+                if not starts:
+                    self._request_started.pop(key, None)
+                now = time.time()
+                self._responses.append({
+                    "seq": len(self._responses) + 1,
+                    "method": getattr(request, "method", ""),
+                    "resource_type": getattr(request, "resource_type", ""),
+                    "status": resp.status,
+                    "status_text": getattr(resp, "status_text", ""),
+                    "url": url,
+                    "ok": int(resp.status) < 400,
+                    "t": now,
+                    "duration_ms": int((now - started) * 1000) if started else None,
+                })
+                self._event.set()
         except Exception:
             pass
 
     def snapshot(self):
-        """操作前调用：返回当前已记录响应的 URL 集合（基线）。"""
-        return set(r["url"] for r in self._responses)
+        """操作前调用：返回响应序号和 URL 基线。
+
+        序号用于识别“同一个 URL 的第二次调用”，避免旧实现按 URL 集合并集后漏掉重复接口。
+        """
+        return {
+            "seq": len(self._responses),
+            "urls": set(r["url"] for r in self._responses),
+        }
 
     def wait_new(self, baseline=None, keyword=None, timeout=15.0, interval=0.3,
                  accept_status=None):
@@ -70,12 +117,27 @@ class ApiWatcher:
           interval    轮询间隔
           accept_status  仅接受这些状态码的响应（默认接受 <400）
         """
-        base = baseline if baseline is not None else set(r["url"] for r in self._responses)
+        if baseline is None:
+            start_seq = len(self._responses)
+            base_urls = set(r["url"] for r in self._responses)
+        elif isinstance(baseline, dict):
+            start_seq = int(baseline.get("seq", 0))
+            base_urls = set(baseline.get("urls", set()))
+        elif isinstance(baseline, int):
+            start_seq = int(baseline)
+            base_urls = set()
+        else:  # 兼容旧 URL 集合基线
+            start_seq = 0
+            base_urls = set(baseline)
         deadline = time.time() + timeout
-        while time.time() < deadline:
+
+        def _collect():
             new = []
             for r in self._responses:
-                if r["url"] in base:
+                if "seq" in r:
+                    if r["seq"] <= start_seq:
+                        continue
+                elif r["url"] in base_urls:
                     continue
                 if keyword is not None and keyword not in r["url"]:
                     continue
@@ -85,77 +147,157 @@ class ApiWatcher:
                 elif r["status"] >= 400:
                     continue
                 new.append(r)
+            return new
+
+        while True:
+            new = _collect()
             if new:
                 return new
-            time.sleep(interval)
-        return []
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return []
+            self._event.wait(min(remaining, max(float(interval), 0.05)))
+            self._event.clear()
+
+    def wait_action(self, action, keyword=None, url_contains=None, predicate=None,
+                    timeout=60.0, accept_status=None, resource_types=("xhr", "fetch")):
+        """执行 action 并等待匹配接口返回，返回 Network 风格响应记录列表。
+
+        这是推荐入口：响应回来即结束；timeout 仅为异常上限。旧 `wait_new` 仅用于
+        “已经发生完、只读观察”的场景，不应再用于动作完成判定。
+        """
+        result = wait_for_response_after_action(
+            self.page, action,
+            url_contains=url_contains or keyword,
+            predicate=predicate,
+            timeout=timeout,
+            accept_status=accept_status,
+            resource_types=resource_types,
+        )
+        response = result.get("response")
+        if response is None:
+            return []
+        request = getattr(response, "request", None)
+        return [{
+            "seq": None,
+            "method": getattr(request, "method", ""),
+            "resource_type": getattr(request, "resource_type", ""),
+            "status": result.get("status", getattr(response, "status", None)),
+            "status_text": result.get("status_text", ""),
+            "url": result.get("url", getattr(response, "url", "")),
+            "ok": int(result.get("status", 500)) < 400,
+            "t": time.time(),
+            "duration_ms": int(float(result.get("elapsed", 0)) * 1000),
+        }]
 
     def recent(self, n=10):
         """最近 n 条响应（调试用）。"""
         return self._responses[-n:]
 
 
-def wait_any_api(page, keyword=None, timeout=15.0, interval=0.3):
-    """快捷用法：操作前先调用得到基线，再操作，再调用本函数。
+_STATIC_SUFFIXES = (
+    ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico",
+    ".woff", ".woff2", ".ttf", ".map",
+)
 
-    base = set()  # 或先收集当前 URL
-    更推荐用 ApiWatcher 实例管理基线。
+
+def _is_static_url(url: str) -> bool:
+    path = str(url or "").split("?", 1)[0].lower()
+    return path.endswith(_STATIC_SUFFIXES)
+
+
+def wait_for_response_after_action(page, action, url_contains=None, predicate=None,
+                                   timeout=60.0, accept_status=None,
+                                   exclude_static=True, raise_on_timeout=False,
+                                   resource_types=("xhr", "fetch")):
+    """在执行 action 前绑定响应等待，等匹配的业务接口返回后立即继续。
+
+    - 不使用固定 5 秒作为完成信号；只要接口返回就结束，接口慢可继续等；
+    - timeout 仅是保护性上限，不是等待时长；
+    - url_contains 支持字符串或字符串列表；
+    - 返回 {ok,status,url,elapsed,response} 或 {ok:False,reason,elapsed,error}。
     """
+    started = time.time()
+    contains = [url_contains] if isinstance(url_contains, str) else list(url_contains or [])
+
+    def _matcher(response):
+        url = response.url or ""
+        status = int(response.status)
+        if exclude_static and _is_static_url(url):
+            return False
+        if resource_types is not None:
+            try:
+                rtype = response.request.resource_type
+            except Exception:
+                rtype = ""
+            if rtype and rtype not in resource_types:
+                return False
+        if contains and not any(x in url for x in contains):
+            return False
+        if accept_status is not None and status not in accept_status:
+            return False
+        if predicate is not None and not predicate(response):
+            return False
+        return True
+
+    try:
+        with page.expect_response(_matcher, timeout=int(float(timeout) * 1000)) as info:
+            if action is not None:
+                action()
+        response = info.value
+        return {
+            "ok": int(response.status) < 400,
+            "reason": "response_received" if int(response.status) < 400 else "http_error",
+            "status": response.status,
+            "status_text": getattr(response, "status_text", ""),
+            "url": response.url,
+            "elapsed": time.time() - started,
+            "response": response,
+        }
+    except Exception as exc:
+        result = {
+            "ok": False,
+            "reason": "timeout" if "Timeout" in type(exc).__name__ else "response_error",
+            "elapsed": time.time() - started,
+            "error": str(exc)[:300],
+        }
+        if raise_on_timeout:
+            raise
+        return result
+
+
+def wait_any_api(page, action=None, keyword=None, timeout=60.0, interval=0.3,
+                 url_contains=None, predicate=None, accept_status=None,
+                 resource_types=("xhr", "fetch")):
+    """等待 action 触发的新业务接口返回。action 为必填。"""
+    if action is None:
+        raise ValueError("wait_any_api 必须传入 action；只读观察请直接使用 ApiWatcher.wait_new")
     w = ApiWatcher(page)
-    return w.wait_new(keyword=keyword, timeout=timeout, interval=interval)
+    return w.wait_action(
+        action, keyword=keyword, url_contains=url_contains, predicate=predicate,
+        timeout=timeout, accept_status=accept_status, resource_types=resource_types,
+    )
 
 
 if __name__ == "__main__":
-    print("api_wait 可用：ApiWatcher(page) -> snapshot() -> 操作 -> wait_new(base)")
+    print("api_wait 推荐：ApiWatcher.wait_action(action) / wait_for_response_after_action")
 
 
-def confirm_action(page, action, watcher=None, keyword=None, timeout=15.0,
+def confirm_action(page, action, watcher=None, keyword=None, timeout=60.0,
+                   response_required=True,
                    toast_selector=".el-message, .el-notification, .el-message-box",
                    form_error_selector=".el-form-item__error"):
-    """统一操作判定：执行操作 → 等新业务接口返回 → 收集错误/页面提示/内联校验错误。
+    """执行 action 并等待业务接口返回，再综合判定结果。
 
-    解决"操作后盲目 sleep / 提前读 DOM"与"校验拦截被误判为失败"的问题（2026-09-03 修正）：
-    - "校验被拦截且有提示（toast/内联错误）"是**已处理（业务拦截）**，不是"无响应失败"；
-    - 仅当"既无新响应、又无任何提示、数据又未变"（processed=False）才需人工核，
-      避免把"必填校验已生效"误当"静默无提示"（如生成方式必填拦截）。
-
-    用法：
-        w = ApiWatcher(page)
-        result = confirm_action(page, lambda: click_action(...))
-        if not result["ok"]:
-            # errors / form_errors 可直接进缺陷清单；processed 区分"被拦截"与"无响应"
-        # ok 后再读 DOM 断言
-
-    返回 dict：
-        ok            操作成功（有新接口且无 HTTP>=400 新响应，且无"校验拦截"类提示）
-        processed     操作是否被处理（有新业务响应 或 有 toast/内联校验提示）
-        reason        "success" | "changed" | "blocked" | "silent" | "http_error"
-        new_responses 操作后新响应列表
-        errors        操作期间错误（HTTP>=400 新响应）
-        toasts        操作后页面可见提示文本
-        form_errors   操作后页面表单内联校验错误文本
+    默认 action 与接口响应绑定：接口返回即继续，timeout 只是异常上限。
+    对“纯前端必填校验”这类不发接口的动作，显式传 response_required=False。
     """
-    if watcher is None:
-        watcher = ApiWatcher(page)
-    base = watcher.snapshot()
-    err_http = []
-
-    def on_resp(resp):
-        try:
-            if resp.status >= 400:
-                err_http.append((resp.status, resp.url[:200]))
-        except Exception:
-            pass
-
-    page.on("response", on_resp)
-    try:
+    w = watcher or ApiWatcher(page)
+    if response_required:
+        responses = w.wait_action(action, keyword=keyword, timeout=timeout)
+    else:
         action()
-        new = watcher.wait_new(base, keyword=keyword, timeout=timeout)
-    finally:
-        try:
-            page.remove_listener("response", on_resp)
-        except Exception:
-            pass
+        responses = []
 
     toasts = []
     try:
@@ -183,29 +325,33 @@ def confirm_action(page, action, watcher=None, keyword=None, timeout=15.0,
     except Exception:
         pass
 
-    err_http_new = [(s, u) for s, u in err_http if u not in set(r["url"] for r in base)]
-    has_new_resp = bool(new)
-    has_feedback = bool(toasts or form_errors)          # toast + 内联错误任一存在即视为"有反馈"
+    errors = [(r.get("status"), r.get("url")) for r in responses if r.get("status", 0) >= 400]
+    has_new_resp = bool(responses)
+    has_feedback = bool(toasts or form_errors)
     has_validation = any(_is_validation(t) for t in (toasts + form_errors))
     has_success = any(_is_success(t) for t in toasts)
-    processed = has_new_resp or has_feedback            # 已处理 = 有新响应 或 有提示
+    processed = has_new_resp or has_feedback
 
-    if err_http_new:
+    if errors:
         ok, reason = False, "http_error"
     elif has_validation:
-        ok, reason = False, "blocked"                   # 校验拦截：已处理，但未成功
-    elif has_success:
-        ok, reason = True, "success"
-    elif has_new_resp:
+        ok, reason = False, "blocked"
+    elif has_success or (has_new_resp and not has_validation):
         ok, reason = True, "success"
     elif has_feedback:
         ok, reason = False, "blocked"
     else:
-        ok, reason = False, "silent"                    # 无任何信号，需人工核
+        ok, reason = False, "silent"
 
-    return {"ok": ok, "processed": processed, "reason": reason,
-            "new_responses": new, "errors": err_http_new,
-            "toasts": toasts, "form_errors": form_errors}
+    return {
+        "ok": ok,
+        "processed": processed,
+        "reason": reason,
+        "new_responses": responses,
+        "errors": errors,
+        "toasts": toasts,
+        "form_errors": form_errors,
+    }
 
 
-__all__ = ["ApiWatcher", "wait_any_api", "confirm_action"]
+__all__ = ["ApiWatcher", "wait_any_api", "wait_for_response_after_action", "confirm_action"]

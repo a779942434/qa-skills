@@ -32,11 +32,14 @@
     低置信不猜、返回候选（`ambiguous` / `low_confidence`）；
   - `click_visible_text(..., heal="<名字>")`：把自愈挂成第 4 级降级（三级都失败才走）。
   - 指纹存 `<workspace>/fingerprints/<名字>.json`（本机、不入 git、web 与 ones 两技能共享）。
-- `scripts/api_wait.py`：接口观测等待（核心等待方式，替代固定 sleep）。
-  - `ApiWatcher(page)`：挂 response 监听（覆盖所有 frame）；
-  - `snapshot()`：操作前取响应基线；`wait_new(base, keyword=None, timeout=15)`：等基线之后出现新响应（可用 URL 关键词缩小范围）；
-  - `confirm_action(page, action, keyword=None)`：统一操作判定（执行操作→等新接口→收集 HTTP≥400 与 toast→返回 ok/errors），失败原因可直接进缺陷清单；
+- `scripts/api_wait.py`：DevTools Network 风格的接口观测等待（核心等待方式，替代固定 sleep）。
+  - `ApiWatcher(page)`：挂 request/response 监听（覆盖所有 frame），记录方法、URL、状态码、耗时和请求序号；同一 URL 的重复调用也可识别；
+  - `wait_for_response_after_action(page, action, url_contains=..., timeout=60)`：操作前绑定响应等待，接口返回立即继续，timeout 只作异常上限；
+  - `wait_action(action, keyword=None, timeout=60)`：推荐入口；动作与接口响应绑定，接口返回即继续，timeout 仅异常上限；
+  - `snapshot()` + `wait_new(...)`：仅保留给“响应已经发生、只读观察”的兼容场景；
+  - `confirm_action(page, action, keyword=None)`：默认使用动作绑定接口等待，再收集 HTTP≥400、toast、内联错误；
   - 业务不同无需预知接口路径，靠基线对比动态识别；无新响应 = 操作未生效。
+- `qa_skill_common/preflight.py`：通用预检（URL/标题/活动页签/控件类型/按钮状态）；配合 `PhaseSpec.preflight` 在造数前阻塞。
 - `scripts/session_helpers.py`：一次会话常驻浏览器助手。新增 `start_persistent_session` / `connect_persistent_session` / `ensure_mes_session` / `stop_persistent_session`，默认使用仓库外用户数据目录和 CDP 9222。
 - `scripts/run_all_template.py`：**分阶段可恢复总入口**——一个任务一个持久会话、一次登录；支持 `--resume`、`--phase <id>`、`--connect`。
   - 每用例写 `run_state.json`，测试数据写 `data_ledger.json`；基础异常快停、业务失败继续。

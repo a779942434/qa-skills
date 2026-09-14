@@ -45,6 +45,9 @@ from qa_skill_common import paths as qa_paths  # noqa: E402
 from qa_skill_common.phase_runner import (  # noqa: E402
     BLOCK, FAIL, PASS, CaseSpec, PhaseRunner, PhaseSpec, RunContext, RunState,
 )
+from qa_skill_common.preflight import (  # noqa: E402
+    active_pane_check, button_state_check, control_type_check, response_wait_check, url_check,
+)
 from bbt_helpers import (  # noqa: E402
     attach_error_watchers, capture_failure_context, configure_page_timeouts,
     error_report, reset_to, snap,
@@ -80,11 +83,31 @@ CASES = [
 # PHASES = [
 #     PhaseSpec("bootstrap", cases=()),
 #     PhaseSpec("data-setup", cases=(CaseSpec("SETUP-01", setup_case),)),
-#     PhaseSpec("core-flow", depends_on=("data-setup",), cases=(
-#         CaseSpec("CORE-01", core_case, module="核心流程"),
-#     )),
+#     PhaseSpec("core-flow",
+#         depends_on=("data-setup",),
+#         provides_data=("split_no",),
+#         preflight=(
+#             url_check("/plan/work-plan/outsource-scheduling/index"),
+#             # 页面动作触发接口时，以接口返回为完成信号，不用固定 5 秒猜完成
+#             response_wait_check(
+#                 lambda page: page.locator(".el-tabs__item", has_text="零件委外").click(),
+#                 url_contains="outsource", timeout=60,
+#             ),
+#             active_pane_check("零件委外", timeout=0),
+#             control_type_check(lambda page: active_pane(page).locator(".el-form-item", has_text="产品"), "select"),
+#         ),
+#         cases=(CaseSpec("CORE-01", core_case, module="核心流程"),),
+#         requires_data=("base_product",),
+#     ),
 # ]
 PHASES: list[PhaseSpec] = []
+
+# 台账校验器：key 对应 RunContext.set_data 写入的数据；--resume 时用于判断数据是否仍有效。
+# 示例：
+# DATA_VALIDATORS = {
+#     "split_no": lambda value: check_split_exists(page, value),
+# }
+DATA_VALIDATORS: dict = {}
 
 
 def run_case(page, watcher, case):
@@ -98,13 +121,21 @@ def run_case(page, watcher, case):
     if case.get("url"):
         reset_to(page, case["url"], case.get("tab"))
 
-    base = watcher.snapshot()
-    # 【按任务改】替换为真实标准操作（只做点击/键入/下拉，禁止 JS 注入改值）。
-    # page.get_by_role("button", name="查询").click()
-    new = watcher.wait_new(base, keyword=case.get("keyword"), timeout=15)
+    def action():
+        # 【按任务改】替换为真实标准操作（只做点击/键入/下拉，禁止 JS 注入改值）。
+        # page.get_by_role("button", name="查询").click()
+        pass
+
+    # 动作与接口响应绑定：接口返回即继续，timeout 只作异常上限。
+    new = watcher.wait_action(
+        action,
+        keyword=case.get("keyword"),
+        url_contains=case.get("keyword"),
+        timeout=60,
+    )
     if not new:
         ev = snap(page, f"{case['id']}_no_response", CONFIG["out_dir"], feature=CONFIG["feature"])
-        return "失败", ev, "无新接口响应，操作未生效"
+        return "失败", ev, "匹配业务接口未返回或超时"
 
     page.wait_for_timeout(500)
     ok = True  # 【按任务改】替换为真实断言；优先数据变化，toast 仅辅助
@@ -211,6 +242,7 @@ def main():
             state=state,
             context=context,
             capture_failure=_capture_failure,
+            validators=DATA_VALIDATORS,
         )
         summary = runner.run(
             _build_phases(watcher),

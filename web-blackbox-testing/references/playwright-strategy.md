@@ -33,7 +33,7 @@
 1. **页签作用域**：多页签页面先用 `active_pane(page)`，所有字段、表格、按钮操作都限定在该 Locator 内；禁止全局 `.el-form-item.first`。隐藏 tab 中同名字段常见 `width=0`，点击会等满默认超时。
 2. **弹窗作用域**：新增/编辑/导入弹窗用 `dialog_by_title(page, "<标题>")`；不要混用 `.el-dialog:visible`、`.el-overlay-dialog` 和全局按钮。Element Plus 的 select/cascader/date popper 会 teleport，下拉选项只在对应 popper 内查找。
 3. **结果状态等待**：保存/导入等操作不要假设弹窗一定关闭。用 `wait_result_or_closed(page, dialog, ["导入完成","失败","已存在"])`，同时处理“结果文本出现”和“弹窗关闭”两种分支。操作后禁止继续读取已 detach 的旧 dialog locator。
-4. **分层短超时**：会话启动后调用 `configure_page_timeouts(page)`，普通动作默认 5 秒、导航 15 秒；长任务单独传 30–60 秒。不要让每个定位错误都拖满 30 秒。
+4. **接口返回作为业务完成信号**：打开页面或触发操作前先挂 `ApiWatcher` / `wait_for_response_after_action`，以 DevTools Network 同样的方式读取接口 URL、方法、状态码和耗时；接口返回即继续，不能用固定 5 秒猜业务完成。固定超时只用于“元素可点击性/异常上限”，不代表成功。
 5. **选择组件严格校验**：下拉用 `select_dropdown_option`，搜索不到目标时不要自动选首项；级联多选用 `select_cascader_values` 选叶并点浮层“确定”，随后断言 tag/value 已回填；控件形态用 `assert_control_type` 单独断言。
 6. **失败快停与现场捕获**：定位/状态失败时调用一次 `capture_failure_context(page, out_dir, name, feature=...)`，记录 URL、activity、toast、内联错误、可见 dialog/popper 数量和截图，然后记「阻塞/环境观察」，不要反复重试同一错误 locator。
 7. **严格定位优先**：能用标题、label、role 精确定位时不要用 `.first` 掩盖多匹配；多匹配应视为脚本问题，先限定作用域。
@@ -54,9 +54,11 @@ result = wait_result_or_closed(page, dlg, ["成功", "失败", "已存在"])
 长任务不得因一次定位错误重新登录、从第一条用例重跑。总入口采用：
 
 1. **持久会话**：MES 使用独立用户数据目录和 CDP 9222；ONES 继续使用 9334，互不干扰。已有会话优先复用。
-2. **阶段顺序**：`bootstrap → recon → data-setup → core-flow → exceptions → non-core → finalize`；阶段间用 `depends_on` 声明依赖。
-3. **检查点粒度**：每条用例结束写 `run_state.json`；业务单号、生成单据等写 `data_ledger.json`。二者不得包含密码、Cookie、Token。
-4. **恢复策略**：`--resume` 跳过“通过”用例，只重跑失败、阻塞和未执行项；阶段依赖未通过时，后续阶段记为阻塞，不编造结果。
+2. **预检先行**：创建业务数据前先执行 `preflight`，检查直达 URL、活动页签、关键控件类型和按钮状态；关键预检失败直接阻塞当前阶段。
+3. **阶段顺序**：`bootstrap → recon → data-setup → core-flow → exceptions → non-core → finalize`；阶段间用 `depends_on` 声明依赖，数据依赖用 `provides_data` / `requires_data` 声明。
+4. **检查点粒度**：每条用例结束写 `run_state.json`；业务单号、生成单据等写 `data_ledger.json`。二者不得包含密码、Cookie、Token。
+5. **恢复前校验台账**：`--resume` 先运行已注册的 ledger validator；生产阶段提供的数据失效时强制重跑该阶段，依赖该数据的阶段标记阻塞，不编造结果。
+6. **恢复策略**：`--resume` 跳过“通过”用例，只重跑失败、阻塞和未执行项；阶段依赖未通过时，后续阶段记为阻塞。
 5. **失败分级**：`InfrastructureAbort`、Playwright Timeout、连接异常属于基础异常，保存现场后停止当前阶段；业务断言失败记录后继续。
 6. **会话收尾**：全部正常完成才关闭本轮启动的持久浏览器；用户中断或基础异常阻塞时保留会话，供 `--resume` 继续。
 
@@ -107,37 +109,38 @@ result = wait_result_or_closed(page, dlg, ["成功", "失败", "已存在"])
 要观测页面实际发出的接口，等"操作触发的业务接口返回"后再断言页面数据。
 业务不同接口路径不同，不要预先固化具体接口；用"基线对比"动态识别新请求。
 
-通用四步（工具见 `scripts/api_wait.py`）：
+推荐模式（动作前绑定响应，接口返回即继续）：
 
 ```python
 from api_wait import ApiWatcher
 
-watcher = ApiWatcher(page)      # 覆盖所有 frame 的 response 监听
-base = watcher.snapshot()       # 1. 操作前记录响应基线
-
-click_action(...)               # 2. 触发操作（切页签/提交/刷卡/刷新）
-
-new = watcher.wait_new(base, timeout=15)   # 3. 等基线之后出现新响应
+watcher = ApiWatcher(page)                 # 挂 request/response 网络监听
+new = watcher.wait_action(
+    lambda: page.get_by_role("button", name="查询").click(),
+    url_contains="/plan/",                 # 可省略，按任意 xhr/fetch 响应
+    timeout=60,                            # 仅异常上限，不表示等满 60 秒
+)
 if not new:
-    # 超时：操作可能未触发请求（按钮没点中/请求被缓存），按失败处理，不硬读页面
+    # 接口未返回或超时：按失败/环境观察处理，不硬读页面
     raise/标记
-page.wait_for_timeout(500)      # 4. 少量渲染余量后再读 DOM
+page.wait_for_timeout(500)                 # 仅少量 DOM 渲染余量
 assert_page_state(...)
 ```
 
 要点：
-- **基线必须操作前取**（`snapshot()`），否则会把旧请求误当新结果（页签切换"读到旧数据/0 条"的根因就是没等新列表接口返回）。
-- 不确定业务接口路径时**不传 keyword**，等任意新响应即可；能判断前缀时（如列表含 `/plan/`、提交含 `/switch/`）可传 `keyword` 缩小范围。
-- 状态码默认只认 <400；个别接口 4xx 是业务预期（如重复提交）时用 `accept_status` 显式放行。
-- IPC 弹窗/页签切换场景强烈建议使用：切页签 → 等新列表接口 → 再读卡片；打开弹窗 → 等新查询接口 → 再 dump 结构；刷卡提交 → 等提交接口 → 再断言 toast/状态。
-- 接口等待代替固定 sleep 后，页签切换等待可从 8~10s 降到 1~3s；失败判定也更准（无新响应=操作未生效，而不是"页面没刷新"）。
+- **动作与响应绑定**：用 `ApiWatcher.wait_action` 或 `wait_for_response_after_action`，在点击/切换/提交前建立响应等待。
+- **接口返回即完成**：2 秒返回就 2 秒继续；接口慢则继续等；`timeout` 仅保护异常挂死。
+- **状态码参与判定**：记录 URL、method、status、耗时；HTTP≥400 直接作为错误信号，不再只看是否有响应。
+- **同一 URL 的重复调用可识别**：按响应序号识别，不按 URL 集合去重。
+- **不把静态资源算业务接口**：默认只等 `xhr/fetch`，并按需用 `url_contains` 缩小范围。
+- `snapshot()+wait_new()` 仅用于“操作已经发生、事后只读观察”的兼容场景；新业务等待全部使用动作绑定模式。
 
 ## 等待优先级与无视觉断言（2026-09-07 增补）
 
 > 原则见 SKILL「执行形态与等待基线」；本段给判定顺序与无视觉场景的具体做法。
 
-- 等待优先级：**接口/响应基线等待 > 条件等待 > 固定 sleep（兜底）**。
-  1. `api_wait.ApiWatcher`：操作前 `snapshot()`，操作后 `wait_new(base)` 等业务接口返回；
+- 等待优先级：**动作绑定接口返回 > 条件等待 > 固定 sleep（兜底）**。
+  1. `api_wait.ApiWatcher.wait_action(...)`：动作前绑定响应，接口返回即继续；
   2. 无接口可观测时用 `wait_visible / wait_text / wait_button / wait_until`；
   3. 固定 `wait_for_timeout` 只用于接口返回后的渲染余量（≤500ms）、首次侦察、无信号兜底。
   一次会话内共用监听器，不重复挂载；同一用例不既用接口等待又叠一堆 sleep。

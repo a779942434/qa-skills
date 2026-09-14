@@ -33,7 +33,7 @@ description: >-
 1. **新站点先适配再动手**：先跑组件指纹探针（`recon_page.py --probe`，一次给出组件库判定与未知前缀）与登录形态；不同就换选择器/登录，不套旧站点。入口优先用**全局搜索按功能名直达**，不走菜单逐级点。
 2. **盲点按钮/隐藏弹窗是高频误点源**：点击用 `bbt_helpers.click_visible_text`；「新增▾」类下拉用 `open_split_add_dropdown`；读弹窗用 `dump_visible_dialogs`。
 3. **页面改版先看差异再动手**：固化过的页面改版后先跑 `recon_page.py --url <URL> --diff <指纹名>` 看「消失 / 变化 / 新增」，只改受影响的部分；选择器失效时 `click_visible_text(page, text, heal="<指纹名>")` 可自愈，不必重新全量侦察。
-4. **多页签/弹窗先限定作用域，失败快停**：页签内字段/表格先用 `active_pane(page)`；弹窗按标题用 `dialog_by_title(page, "新增")`，不要全局 `.el-form-item.first`。普通动作超时 3–5 秒，导入/下载才用长等待；失败只抓一次 `capture_failure_context`，禁止反复白等 30 秒。详见 [references/playwright-strategy.md](references/playwright-strategy.md)。
+4. **多页签/弹窗先限定作用域，失败快停**：页签内字段/表格先用 `active_pane(page)`；弹窗按标题用 `dialog_by_title(page, "新增")`，不要全局 `.el-form-item.first`。DOM 可点击性超时 3–5 秒；业务完成以接口返回（URL/状态码/耗时）为准，不用固定 5 秒猜完成。失败只抓一次 `capture_failure_context`，禁止反复白等 30 秒。详见 [references/playwright-strategy.md](references/playwright-strategy.md)。
 
 > 执行形态（一次会话一个总入口脚本）、等待基线、无视觉判定等已归入下方「必守清单 B」与「执行形态与等待基线」，此处不重复。
 
@@ -55,7 +55,7 @@ description: >-
 
 ### B. 默认做法（可自行决定，不必逐一确认）
 
-1. **复用固化脚本**：登录/导航用 `qa_skill_common`（`login_for_page`/`goto`），侦察用 `recon-generic/recon_page.py`，造数用 `bbt_osd_setup.py`，提缺陷用 `ones_submit_defects.py`；确有缺口才扩展，不另写平行替代脚本。**等待用 `api_wait.ApiWatcher`（不用 `wait_for_timeout` > 500ms）；判定操作结果用 `judge_action` 四源交叉；多级交互（级联/树）先 `detect_cascade` 再点。**
+1. **复用固化脚本**：登录/导航用 `qa_skill_common`（`login_for_page`/`goto`），侦察用 `recon-generic/recon_page.py`，造数用 `bbt_osd_setup.py`，提缺陷用 `ones_submit_defects.py`；确有缺口才扩展，不另写平行替代脚本。**等待优先用 `api_wait.ApiWatcher.wait_action`（动作前绑定接口响应，接口返回即继续）；判定操作结果用 `judge_action` 四源交叉；多级交互（级联/树）先 `detect_cascade` 再点。**
 2. **一次会话跑完**：一次登录 + 一个总入口长脚本串行跑完全部用例，不按用例反复起浏览器/登录。
 3. **等待优先级**：接口/响应基线等待 > 条件等待 > 固定 sleep（仅 ≤500ms 渲染余量/首次侦察兜底）。
 4. **侦察纪律**：同一页面侦察 ≤2 次，结果固化进 references 后直接引用；不 dump 整页文本。固化必须含**直达 URL**（到达目标页后的 `location.href`）——用例入口一律 `goto(直达URL)`，不重走菜单/搜索逐级点；**goto 后被重定向说明前置没做**（如未解锁、未选站），先补前置再直达。会反复测的页面，固化时**同步 `--save-fingerprint <功能名>` 存机器指纹**，改版后用 `--diff <功能名>` 看差异，不必重新侦察。

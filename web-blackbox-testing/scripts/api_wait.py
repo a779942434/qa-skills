@@ -14,4 +14,4 @@ from qa_skill_common.api_wait import *  # noqa: F401,F403
 
 
 if __name__ == "__main__":
-    print("api_wait 可用：ApiWatcher(page) -> snapshot() -> 操作 -> wait_new(base)")
+    print("api_wait 推荐：ApiWatcher.wait_action(action) / wait_for_response_after_action")

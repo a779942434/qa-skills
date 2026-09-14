@@ -121,3 +121,66 @@ class TestPhaseRunner(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestPreflightAndLedger(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = RunState.load_or_create(Path(self.tmp.name) / "state", "run-preflight", "预检与台账")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_preflight_failure_blocks_phase_before_cases(self):
+        from qa_skill_common.preflight import PreflightCheck
+
+        calls = []
+
+        def fail_check(page):
+            return {"ok": False, "reason": "必需控件缺失"}
+
+        phase = PhaseSpec(
+            "p1",
+            cases=(CaseSpec("c1", lambda ctx, page: (calls.append("c1") or CaseResult(PASS))),),
+            preflight=(PreflightCheck("preflight-1", fail_check),),
+        )
+        captured = []
+        runner = PhaseRunner(None, self.state, capture_failure=lambda **kw: captured.append(kw["case_id"]) or {})
+        runner.run([phase])
+        self.assertEqual(calls, [])
+        self.assertEqual(self.state.phase_status("p1"), BLOCK)
+        self.assertEqual(captured, ["preflight"])
+
+    def test_invalid_ledger_forces_resume_replay(self):
+        calls = []
+
+        def setup(ctx, page):
+            calls.append(ctx.state.get_data("record_no"))
+            ctx.set_data("record_no", "VALID-001")
+            return CaseResult(PASS)
+
+        phase = PhaseSpec("setup", cases=(CaseSpec("c1", setup),), provides_data=("record_no",))
+        runner = PhaseRunner(None, self.state, validators={"record_no": lambda v: v == "VALID-001"})
+        runner.run([phase])
+        self.assertEqual(self.state.phase_status("setup"), PASS)
+
+        self.state.set_data("record_no", "STALE-001")
+        runner.run([phase], resume=True)
+        self.assertEqual(calls, [None, "STALE-001"])
+        self.assertEqual(self.state.get_data("record_no"), "VALID-001")
+
+    def test_missing_required_ledger_blocks_consumer_phase(self):
+        calls = []
+        self.state.data_meta["record_no"] = {"required": True, "validator": "", "note": ""}
+        phase = PhaseSpec(
+            "consume",
+            cases=(CaseSpec("c1", lambda ctx, page: (calls.append("c1") or CaseResult(PASS))),),
+            requires_data=("record_no",),
+        )
+        PhaseRunner(None, self.state, validators={"record_no": lambda v: False}).run([phase])
+        self.assertEqual(calls, [])
+        self.assertEqual(self.state.phase_status("consume"), BLOCK)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

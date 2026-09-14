@@ -131,8 +131,8 @@ AL 定制版还有设备级「计划切换」；本功能用「产线计划切�
 
 ### 接口等待（替代固定 sleep）
 切页签/打开弹窗/刷卡提交后，不要固定 wait 8~10s，用 `scripts/api_wait.py`：
-操作前 `base = watcher.snapshot()`，操作后 `new = watcher.wait_new(base, timeout=15)`，
-等新接口返回后再读 `.content-item` / `.total-count` / toast。
+使用 `watcher.wait_action(action, url_contains=..., timeout=60)`：动作前绑定响应，
+接口返回即继续；随后再读 `.content-item` / `.total-count` / toast。
 
 
 ## 计划切换弹窗交互纪律（2026-08-21 重测增补）

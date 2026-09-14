@@ -882,54 +882,32 @@ def read_dialog(page, idx=-1):
 
 
 def judge_action(page, action, api_watcher=None, data_diff=None, keyword=None,
-                 timeout=15.0, toast_selector=".el-message, .el-notification, .el-message-box",
-                 error_selector=".el-form-item__error"):
-    """执行 action 并综合多信号判定操作是否"已处理/成功"，避免误报（2026-09-03 增补）。
+                 timeout=60.0, toast_selector=".el-message, .el-notification, .el-message-box",
+                 error_selector=".el-form-item__error", response_required=None,
+                 url_contains=None, resource_types=("xhr", "fetch")):
+    """执行 action 并综合接口状态与页面反馈判定结果。
 
-    背景：必填校验拦截常以 toast 弹出、且可能不发新业务接口——只判"有没有新响应"
-    会把"校验已拦截（有提示）"误判为"静默无响应"。本函数同时考虑：
-      已处理(processed) = 有业务新响应 或 有 toast/内联校验提示；
-      成功(ok)          = 有新响应且无错误 且 无"校验拦截"类提示，或 data_diff 显示数据已变。
-
-    返回 dict：{processed, ok, reason, signals}
-      reason: "success"/"changed"/"blocked"/"silent"/"http_error" 之一。
-    用法：把"点确定、提交、生成"这类可能被校验拦截或网络失败的动作交进来；
-      processed=False 且 reason="silent" = 无任何信号，才需要人工核（真正的无反馈）。
+    默认在动作前绑定接口响应：响应返回即继续，timeout 只作异常上限。
+    纯前端校验动作显式传 response_required=False。
     """
-    base = None
-    if api_watcher is not None:
-        try:
-            base = api_watcher.snapshot()
-        except Exception:
-            base = None
-    http_err = []
-
-    def on_resp(resp):
-        try:
-            if resp.status >= 400:
-                http_err.append((resp.status, resp.url[:200]))
-        except Exception:
-            pass
-
-    page.on("response", on_resp)
+    from .api_wait import ApiWatcher
+    watcher = api_watcher or ApiWatcher(page)
+    if response_required is None:
+        response_required = True
     new_responses = []
-    try:
-        action()
-        if api_watcher is not None:
-            try:
-                new_responses = api_watcher.wait_new(base, keyword=keyword, timeout=timeout)
-            except Exception:
-                new_responses = []
-    finally:
+    if response_required:
         try:
-            page.remove_listener("response", on_resp)
+            new_responses = watcher.wait_action(
+                action, keyword=keyword, url_contains=url_contains,
+                timeout=timeout, resource_types=resource_types,
+            )
         except Exception:
-            pass
+            new_responses = []
+    else:
+        action()
 
     sig = read_feedback(page, toast_selector=toast_selector, error_selector=error_selector)
-    base_urls = base or set()
-    err_new = [(s, u) for s, u in http_err if u not in base_urls]
-
+    err_new = [(r.get("status"), r.get("url")) for r in new_responses if int(r.get("status", 0)) >= 400]
     has_new_resp = bool(new_responses)
     has_feedback = bool(sig["toasts"] or sig["form_errors"])
     has_validation = any(_is_validation(t) for t in (sig["toasts"] + sig["form_errors"]))
@@ -941,11 +919,9 @@ def judge_action(page, action, api_watcher=None, data_diff=None, keyword=None,
         ok, reason = False, "http_error"
     elif changed:
         ok, reason = True, "changed"
-    elif has_success:
-        ok, reason = has_new_resp or True, "success"
     elif has_validation:
         ok, reason = False, "blocked"
-    elif has_new_resp:
+    elif has_success or has_new_resp:
         ok, reason = True, "success"
     elif has_feedback:
         ok, reason = False, "blocked"
