@@ -43,7 +43,7 @@
 - `scripts/session_helpers.py`：一次会话常驻浏览器助手。新增 `start_persistent_session` / `connect_persistent_session` / `ensure_mes_session` / `stop_persistent_session`，默认使用仓库外用户数据目录和 CDP 9222。
 - `scripts/run_all_template.py`：**分阶段可恢复总入口**——一个任务一个持久会话、一次登录；支持 `--resume`、`--phase <id>`、`--connect`。
   - 每用例写 `run_state.json`，测试数据写 `data_ledger.json`；基础异常快停、业务失败继续。
-  - 底层运行器见根公共包 `qa_skill_common/phase_runner.py`；旧 `CASES` 写法仍可用。
+  - 底层运行器见根公共包 `qa_skill_common/phase_runner.py`；`CaseGroupSpec` 用于弹窗 micro-case 批处理，同一弹窗只开关一次，每个 micro-case 独立检查点；旧 `CASES` 写法仍可用。
 - `scripts/report_gen.py`：报告/缺陷清单骨架生成（`gen_report` / `gen_bug`），执行脚本直接喂结果生成 markdown，AI 只补分析。
 - `scripts/data_cleanup.py`：数据基线对比与清理留痕（`compare_state` / `write_cleanup_note`）。**按需使用**：测试环境保留造数为主，仅在确需清理时对比基线并记录已保留/已恢复（遵循必守 C（结束闸门））。
 - `scripts/ipc_helpers.py`：IPC 单机/产线界面导航辅助。

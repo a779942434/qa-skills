@@ -43,7 +43,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 from api_wait import ApiWatcher  # noqa: E402
 from qa_skill_common import paths as qa_paths  # noqa: E402
 from qa_skill_common.phase_runner import (  # noqa: E402
-    BLOCK, FAIL, PASS, CaseSpec, PhaseRunner, PhaseSpec, RunContext, RunState,
+    BLOCK, FAIL, PASS, CaseGroupSpec, CaseSpec, PhaseRunner, PhaseSpec, RunContext, RunState,
 )
 from qa_skill_common.preflight import (  # noqa: E402
     active_pane_check, button_state_check, control_type_check, response_wait_check, url_check,
@@ -95,6 +95,18 @@ CASES = [
 #             ),
 #             active_pane_check("零件委外", timeout=0),
 #             control_type_check(lambda page: active_pane(page).locator(".el-form-item", has_text="产品"), "select"),
+#         ),
+#         groups=(
+#             CaseGroupSpec(
+#                 "add-dialog-micro",
+#                 setup=open_add_dialog,
+#                 reset=reset_add_dialog,
+#                 teardown=close_add_dialog,
+#                 cases=(
+#                     CaseSpec("FORM-001", validate_required, module="新增弹窗"),
+#                     CaseSpec("FORM-002", validate_precision, module="新增弹窗"),
+#                 ),
+#             ),
 #         ),
 #         cases=(CaseSpec("CORE-01", core_case, module="核心流程"),),
 #         requires_data=("base_product",),

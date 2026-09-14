@@ -296,7 +296,7 @@ def active_pane(page, selector=".el-tab-pane:visible"):
     return page.locator("body")
 
 
-def dialog_by_title(page, title=None, timeout=0):
+def dialog_by_title(page, title=None, timeout=2):
     """返回当前可见弹窗 Locator；传 title 时按 aria-label/标题精确定位。
 
     `title=None` 时返回最后一个可见 overlay dialog，适合关闭/诊断；

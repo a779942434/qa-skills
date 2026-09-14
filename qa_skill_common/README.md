@@ -12,7 +12,7 @@
 | `bbt_helpers.py` | 浏览器连接、错误监听、条件等待、表格读取、截图、数据基线、页面结构侦察与防超时 helper |
 | `bbt_osd_common.py` | MES 登录、导航、表单/表格辅助与幂等造数函数 |
 | `bbt_osd_setup.py` | 产品、工艺路线、工序与 BOM 的一次性造数入口 |
-| `phase_runner.py` | 分阶段执行、用例检查点、数据台账、恢复执行与失败分级 |
+| `phase_runner.py` | 分阶段执行、弹窗 micro-case 批处理、用例检查点、数据台账、恢复执行与失败分级 |
 | `preflight.py` | 通用预检（URL、活动页签、控件类型、按钮状态） |
 | `session_helpers.py` | 普通会话与持久 MES 会话（CDP 9222）管理 |
 | `recon_generic/` | 页面、弹窗、下拉与主子表的四个参数化侦察命令 |

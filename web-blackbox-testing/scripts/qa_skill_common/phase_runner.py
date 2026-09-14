@@ -89,6 +89,17 @@ class CaseSpec:
 
 
 @dataclass
+class CaseGroupSpec:
+    """共享一次 setup/teardown 的 micro-case 组（典型场景：同一弹窗内连续校验）。"""
+    id: str
+    cases: tuple[CaseSpec, ...] = field(default_factory=tuple)
+    setup: Callable[["RunContext", Any], Any] | None = None
+    reset: Callable[["RunContext", Any], None] | None = None
+    teardown: Callable[["RunContext", Any], None] | None = None
+    optional: bool = False
+
+
+@dataclass
 class PhaseSpec:
     id: str
     cases: tuple[CaseSpec, ...] = field(default_factory=tuple)
@@ -97,6 +108,7 @@ class PhaseSpec:
     setup: Callable[["RunContext", Any], None] | None = None
     teardown: Callable[["RunContext", Any], None] | None = None
     preflight: tuple[PreflightCheck, ...] = ()
+    groups: tuple[CaseGroupSpec, ...] = ()
     provides_data: tuple[str, ...] = ()
     requires_data: tuple[str, ...] = ()
 
@@ -154,6 +166,7 @@ class RunState:
         self.started_at = data.get("started_at", _now()) if data else _now()
         self.updated_at = data.get("updated_at", _now()) if data else _now()
         self.cases: dict[str, dict] = data.get("cases", {}) if data else {}
+        self.groups: dict[str, dict] = data.get("groups", {}) if data else {}
         self.phases: dict[str, dict] = data.get("phases", {}) if data else {}
         self.meta: dict = data.get("meta", {}) if data else {}
 
@@ -185,6 +198,7 @@ class RunState:
             "started_at": self.started_at,
             "updated_at": self.updated_at,
             "phases": self.phases,
+            "groups": self.groups,
             "cases": self.cases,
             "data": self.data,
             "data_meta": self.data_meta,
@@ -296,6 +310,19 @@ class RunState:
             self.data.setdefault("case_data", {})[case_id] = data
         self.save()
 
+    def mark_group(self, group_id: str, phase_id: str, status: str, note: str = "") -> None:
+        status = normalize_status(status)
+        prev = self.groups.get(group_id) or {}
+        self.groups[group_id] = {
+            "group_id": group_id,
+            "phase_id": phase_id,
+            "status": status,
+            "note": note or "",
+            "attempts": int(prev.get("attempts", 0)) + 1,
+            "updated_at": _now(),
+        }
+        self.save()
+
     def mark_phase(self, phase_id: str, status: str, note: str = "") -> None:
         status = normalize_status(status)
         prev = self.phases.get(phase_id) or {}
@@ -357,7 +384,10 @@ class PhaseRunner:
         phase_list = list(phases)
         seen = set()
         for phase in phase_list:
-            for case in phase.cases:
+            all_cases = list(phase.cases)
+            for group in phase.groups:
+                all_cases.extend(group.cases)
+            for case in all_cases:
                 if case.id in seen:
                     raise ValueError(f"重复用例ID: {case.id}")
                 seen.add(case.id)
@@ -422,32 +452,18 @@ class PhaseRunner:
             except Exception as exc:
                 self._handle_infrastructure(phase.id, "<setup>", exc, phase)
                 return
+
         blocked = False
-        for case in phase.cases:
-            if resume and not force_replay and self.state.case_status(case.id) == PASS:
-                self.log(f"[{case.id}] 已完成，跳过")
-                continue
-            missing = [d for d in case.depends_on if self.state.case_status(d) != PASS]
-            if missing:
-                note = f"依赖用例未通过: {', '.join(missing)}"
-                self.state.mark_case(case.id, phase.id, BLOCK, note=note)
-                self.log(f"[{case.id}] {BLOCK} {note}")
-                continue
-            try:
-                result = normalize_case_result(case.run(self.context, self.page))
-                self.state.mark_case(
-                    case.id, phase.id, result.status, note=result.note,
-                    evidence=result.evidence, actual=result.actual, data=result.data,
-                )
-                self.log(f"[{case.id}] {result.status} {result.note}")
-            except Exception as exc:
-                if classify_exception(exc) == "infrastructure":
-                    self._handle_infrastructure(phase.id, case.id, exc, phase)
-                    blocked = True
-                    break
-                note = f"{type(exc).__name__}: {exc}"
-                self.state.mark_case(case.id, phase.id, FAIL, note=note, actual=note)
-                self.log(f"[{case.id}] {FAIL} {note}")
+        for case in self._pending_cases(phase.cases, resume, force_replay):
+            if self._run_one_case(case, phase, resume=False, force_replay=force_replay):
+                blocked = True
+                break
+        for group in phase.groups:
+            if blocked:
+                break
+            if self._run_group(group, phase, resume=resume, force_replay=force_replay):
+                blocked = True
+
         if phase.teardown:
             try:
                 phase.teardown(self.context, self.page)
@@ -455,13 +471,121 @@ class PhaseRunner:
                 note = f"teardown失败: {type(exc).__name__}: {exc}"
                 self.state.meta.setdefault("teardown_errors", {})[phase.id] = note
         if not blocked:
+            phase_cases = list(phase.cases)
+            for group in phase.groups:
+                phase_cases.extend(group.cases)
             phase_failed = any(
-                self.state.cases.get(c.id, {}).get("status") == FAIL for c in phase.cases
+                self.state.cases.get(c.id, {}).get("status") == FAIL for c in phase_cases
             )
             status = FAIL if phase_failed else PASS
             self.state.mark_phase(phase.id, status)
             self.log(f"[phase:{phase.id}] {status}")
         self.state.save()
+
+    def _pending_cases(self, cases: tuple[CaseSpec, ...], resume: bool, force_replay: bool):
+        pending = []
+        for case in cases:
+            if resume and not force_replay and self.state.case_status(case.id) == PASS:
+                self.log(f"[{case.id}] 已完成，跳过")
+                continue
+            pending.append(case)
+        return pending
+
+    def _run_one_case(self, case: CaseSpec, phase: PhaseSpec, resume: bool,
+                      force_replay: bool = False) -> bool:
+        """返回 True 表示基础异常，调用方应停止当前阶段。"""
+        if resume and not force_replay and self.state.case_status(case.id) == PASS:
+            self.log(f"[{case.id}] 已完成，跳过")
+            return False
+        missing = [d for d in case.depends_on if self.state.case_status(d) != PASS]
+        if missing:
+            note = f"依赖用例未通过: {', '.join(missing)}"
+            self.state.mark_case(case.id, phase.id, BLOCK, note=note)
+            self.log(f"[{case.id}] {BLOCK} {note}")
+            return False
+        try:
+            result = normalize_case_result(case.run(self.context, self.page))
+            self.state.mark_case(
+                case.id, phase.id, result.status, note=result.note,
+                evidence=result.evidence, actual=result.actual, data=result.data,
+            )
+            self.log(f"[{case.id}] {result.status} {result.note}")
+            return False
+        except Exception as exc:
+            if classify_exception(exc) == "infrastructure":
+                self._handle_infrastructure(phase.id, case.id, exc, phase)
+                return True
+            note = f"{type(exc).__name__}: {exc}"
+            self.state.mark_case(case.id, phase.id, FAIL, note=note, actual=note)
+            self.log(f"[{case.id}] {FAIL} {note}")
+            return False
+
+    def _run_group(self, group: CaseGroupSpec, phase: PhaseSpec, resume: bool,
+                   force_replay: bool = False) -> bool:
+        """返回 True 表示基础异常，调用方应停止当前阶段。"""
+        pending = self._pending_cases(group.cases, resume, force_replay)
+        group_rec = self.state.groups.get(group.id) or {}
+        if not pending:
+            if group_rec.get("status") == PASS:
+                self.log(f"[group:{group.id}] 已完成，跳过")
+                return False
+            # 上次 setup/teardown 失败但用例已通过：重跑整组以完成确定性收尾。
+            pending = list(group.cases)
+        self.log(f"[group:{group.id}] 开始（{len(pending)} 个 micro-case）")
+        try:
+            setup_result = group.setup(self.context, self.page) if group.setup else None
+            self.context.extras.setdefault("groups", {})[group.id] = setup_result
+        except Exception as exc:
+            note = f"group setup失败: {type(exc).__name__}: {exc}"
+            self._handle_infrastructure(phase.id, group.id, InfrastructureAbort(note), phase)
+            for case in pending:
+                if self.state.case_status(case.id) != PASS:
+                    self.state.mark_case(case.id, phase.id, BLOCK, note=note)
+            self.state.mark_group(group.id, phase.id, BLOCK, note)
+            return True
+
+        blocked = False
+        for case in pending:
+            if group.reset:
+                try:
+                    group.reset(self.context, self.page)
+                except Exception as exc:
+                    note = f"group reset失败: {type(exc).__name__}: {exc}"
+                    self._handle_infrastructure(phase.id, group.id, InfrastructureAbort(note), phase)
+                    for rest in pending:
+                        if self.state.case_status(rest.id) != PASS:
+                            self.state.mark_case(rest.id, phase.id, BLOCK, note=note)
+                    self.state.mark_group(group.id, phase.id, BLOCK, note)
+                    blocked = True
+                    break
+            if self._run_one_case(case, phase, resume=False, force_replay=force_replay):
+                for rest in pending:
+                    if self.state.case_status(rest.id) != PASS:
+                        self.state.mark_case(rest.id, phase.id, BLOCK, note="group 因基础异常中止")
+                self.state.mark_group(group.id, phase.id, BLOCK, note="group 因基础异常中止")
+                blocked = True
+                break
+
+        if group.teardown:
+            try:
+                group.teardown(self.context, self.page)
+            except Exception as exc:
+                note = f"group teardown失败: {type(exc).__name__}: {exc}"
+                self.state.meta.setdefault("group_teardown_errors", {})[group.id] = note
+                self.state.mark_group(group.id, phase.id, BLOCK, note)
+                self.state.mark_phase(phase.id, BLOCK, note)
+                return True
+        if not blocked:
+            statuses = [self.state.case_status(c.id) for c in group.cases]
+            if BLOCK in statuses:
+                status = BLOCK
+            elif FAIL in statuses:
+                status = FAIL
+            else:
+                status = PASS
+            self.state.mark_group(group.id, phase.id, status)
+            self.log(f"[group:{group.id}] {status}")
+        return blocked
 
     def _handle_infrastructure(self, phase_id: str, case_id: str, exc: Exception, phase: PhaseSpec) -> None:
         note = f"基础能力异常快停: {type(exc).__name__}: {exc}"
@@ -498,6 +622,6 @@ class PhaseRunner:
 
 __all__ = [
     "PASS", "FAIL", "BLOCK", "InfrastructureAbort", "BusinessCaseFailure",
-    "CaseResult", "CaseSpec", "PhaseSpec", "RunContext", "RunState", "PhaseRunner",
+    "CaseResult", "CaseSpec", "CaseGroupSpec", "PhaseSpec", "RunContext", "RunState", "PhaseRunner",
     "normalize_status", "normalize_case_result", "classify_exception",
 ]

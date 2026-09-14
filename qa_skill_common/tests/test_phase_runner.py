@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from qa_skill_common.phase_runner import (  # noqa: E402
-    BLOCK, FAIL, PASS, BusinessCaseFailure, CaseResult, CaseSpec,
+    BLOCK, FAIL, PASS, BusinessCaseFailure, CaseGroupSpec, CaseResult, CaseSpec,
     InfrastructureAbort, PhaseRunner, PhaseSpec, RunState,
 )
 
@@ -184,3 +184,100 @@ class TestPreflightAndLedger(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestMicroCaseGroups(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = RunState.load_or_create(Path(self.tmp.name) / "state", "run-groups", "弹窗 micro-case")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_group_setup_reset_teardown_once_per_batch(self):
+        calls = {"setup": 0, "reset": 0, "teardown": 0, "cases": []}
+
+        def setup(ctx, page):
+            calls["setup"] += 1
+            return {"dialog": "add"}
+
+        def reset(ctx, page):
+            calls["reset"] += 1
+
+        def teardown(ctx, page):
+            calls["teardown"] += 1
+
+        def case(cid):
+            def _run(ctx, page):
+                calls["cases"].append(cid)
+                self.assertEqual(ctx.extras["groups"]["dialog"]["dialog"], "add")
+                return CaseResult(PASS, cid)
+            return _run
+
+        group = CaseGroupSpec(
+            "dialog", cases=(CaseSpec("m1", case("m1")), CaseSpec("m2", case("m2"))),
+            setup=setup, reset=reset, teardown=teardown,
+        )
+        PhaseRunner(None, self.state).run([PhaseSpec("p1", groups=(group,))])
+        self.assertEqual(calls, {"setup": 1, "reset": 2, "teardown": 1, "cases": ["m1", "m2"]})
+        self.assertEqual(self.state.groups["dialog"]["status"], PASS)
+
+    def test_group_business_failure_continues_next_micro_case(self):
+        calls = []
+
+        def fail_business(ctx, page):
+            calls.append("m1")
+            raise BusinessCaseFailure("字段校验不符")
+
+        def pass_next(ctx, page):
+            calls.append("m2")
+            return CaseResult(PASS)
+
+        group = CaseGroupSpec("dialog", cases=(CaseSpec("m1", fail_business), CaseSpec("m2", pass_next)))
+        PhaseRunner(None, self.state).run([PhaseSpec("p1", groups=(group,))])
+        self.assertEqual(calls, ["m1", "m2"])
+        self.assertEqual(self.state.case_status("m1"), FAIL)
+        self.assertEqual(self.state.case_status("m2"), PASS)
+        self.assertEqual(self.state.groups["dialog"]["status"], FAIL)
+        self.assertEqual(self.state.phase_status("p1"), FAIL)
+
+    def test_group_infrastructure_stops_remaining_and_can_resume(self):
+        calls = []
+
+        def infra(ctx, page):
+            calls.append("m1")
+            raise InfrastructureAbort("dialog missing")
+
+        def never(ctx, page):
+            calls.append("m2")
+            return CaseResult(PASS)
+
+        group = CaseGroupSpec("dialog", cases=(CaseSpec("m1", infra), CaseSpec("m2", never)))
+        PhaseRunner(None, self.state, capture_failure=lambda **kw: {}).run([PhaseSpec("p1", groups=(group,))])
+        self.assertEqual(calls, ["m1"])
+        self.assertEqual(self.state.case_status("m1"), BLOCK)
+        self.assertEqual(self.state.case_status("m2"), BLOCK)
+        self.assertEqual(self.state.phase_status("p1"), BLOCK)
+
+        calls.clear()
+        resumed = CaseGroupSpec("dialog", cases=(
+            CaseSpec("m1", lambda ctx, page: (calls.append("m1") or CaseResult(PASS))),
+            CaseSpec("m2", lambda ctx, page: (calls.append("m2") or CaseResult(PASS))),
+        ))
+        PhaseRunner(None, self.state).run([PhaseSpec("p1", groups=(resumed,))], resume=True)
+        self.assertEqual(calls, ["m1", "m2"])
+        self.assertEqual(self.state.groups["dialog"]["status"], PASS)
+        self.assertEqual(self.state.phase_status("p1"), PASS)
+
+    def test_group_setup_skipped_when_all_cases_passed(self):
+        setup_calls = []
+
+        def setup(ctx, page):
+            setup_calls.append("setup")
+
+        case = CaseSpec("m1", lambda ctx, page: CaseResult(PASS))
+        group = CaseGroupSpec("dialog", cases=(case,), setup=setup)
+        phases = [PhaseSpec("p1", groups=(group,))]
+        PhaseRunner(None, self.state).run(phases)
+        PhaseRunner(None, self.state).run(phases, resume=True)
+        self.assertEqual(setup_calls, ["setup"])
