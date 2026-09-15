@@ -36,6 +36,7 @@ from ones_helpers import (  # noqa: E402
     get_issue_type_scope,
     get_parent_context,
     list_related_tasks,
+    append_task_description_images,
     upload_task_evidences_api,
 )
 
@@ -216,6 +217,27 @@ def attach_evidence(page, team_uuid, defect_uuid, files):
     return False, f"附件接口超时，缺少: {', '.join(missing)}"
 
 
+def inline_description_evidence(page, team_uuid, defect_uuid, files, timeout=90):
+    """把图片证据以内嵌图片形式补入缺陷描述；非图片证据不处理。"""
+    images = [Path(p) for p in files
+              if Path(p).suffix.lower() in ('.png', '.jpg', '.jpeg', '.gif', '.webp')]
+    if not images:
+        return True, '无图片证据，跳过描述内嵌'
+    try:
+        result = append_task_description_images(
+            page, team_uuid, defect_uuid, images, timeout=timeout,
+        )
+    except Exception as exc:
+        return False, f'描述内嵌图片失败: {exc}'
+    if not result.get('verified'):
+        return False, f"描述内嵌图片未校验通过: {result}"
+    return True, (
+        f"描述内嵌图片 {len(result.get('inserted') or [])} 个，"
+        f"跳过重复 {len(result.get('skipped') or [])} 个，"
+        f"当前共 {result.get('image_count')} 张"
+    )
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bug-report", required=True, help="缺陷清单 md 路径")
@@ -229,6 +251,8 @@ def main():
     ap.add_argument("--severity", default=DEFAULT_SEVERITY, help="严重程度（默认一般）")
     ap.add_argument("--dry-run", action="store_true", help="只解析校验不建单")
     ap.add_argument("--skip-evidence", action="store_true", help="跳过证据补传")
+    ap.add_argument("--no-inline-evidence", action="store_true", help="只传附件，不把截图内嵌到描述")
+    ap.add_argument("--inline-timeout", type=float, default=90, help="描述内嵌图片超时秒数（默认90）")
     args = ap.parse_args()
 
     team, task = parse_work_order(args.work_order)
@@ -341,6 +365,16 @@ def main():
                         f"{b['key']} 已创建并关联 #{number} uuid={uuid}，"
                         f"但附件未确认，停止后续建单；请勿重复创建，按此 uuid 重试附件"
                     )
+                if not args.no_inline_evidence:
+                    inline_ok, inline_msg = inline_description_evidence(
+                        page, team, uuid, files, timeout=args.inline_timeout,
+                    )
+                    print(f"    描述内嵌图片: {inline_ok} {inline_msg}")
+                    if not inline_ok:
+                        raise RuntimeError(
+                            f"{b['key']} 已创建并关联 #{number} uuid={uuid}，附件已上传，"
+                            f"但截图未内嵌到描述；请勿重复创建，按此 uuid 重试描述内嵌图片"
+                        )
 
         titles = list_related_tasks(page, team, task, req["summary"] or "")
         dup = dedup_check(titles)

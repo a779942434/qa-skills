@@ -10,9 +10,11 @@
 """
 import json
 import mimetypes
+import re
 import time as _time
 import uuid as uuid_mod
 from pathlib import Path
+from urllib.parse import unquote
 
 from playwright.sync_api import sync_playwright
 
@@ -561,6 +563,189 @@ def upload_task_evidences_api(page, team_uuid, task_uuid, file_paths, timeout=90
         before_uuids=before_uuids, timeout=timeout,
     )
     return ok, data, missing, uploaded
+
+
+def _inline_image_names(html):
+    """从描述富文本中提取图片文件名，用于避免重复插入。"""
+    names = set()
+    for raw in re.findall(r'filename=([^&"\\]+)', html or ''):
+        try:
+            name = unquote(raw).strip()
+        except Exception:
+            name = str(raw).strip()
+        if name:
+            names.add(name)
+    # 兼容未带 filename 参数的极少见图片节点
+    for raw in re.findall(r'<img[^>]+data-uuid="([^"]+)"', html or ''):
+        if raw:
+            names.add(str(raw))
+    return names
+
+
+def _visible_description_editor(page):
+    """选择当前真正可见、尺寸最大的描述编辑器，排除隐藏的占位 editor。"""
+    editors = page.locator('.cke_wysiwyg_div[contenteditable=true]:visible')
+    best = None
+    best_area = -1
+    for i in range(editors.count()):
+        item = editors.nth(i)
+        try:
+            box = item.bounding_box() or {}
+            width = float(box.get('width') or 0)
+            height = float(box.get('height') or 0)
+            area = width * height
+            if width >= 200 and height >= 40 and area > best_area:
+                best, best_area = item, area
+        except Exception:
+            continue
+    return best
+
+
+def append_task_description_images(page, team_uuid, task_uuid, image_paths,
+                                   timeout=90.0, verify_loaded=True):
+    """把截图以内嵌图片形式追加到 ONES 工作项富文本描述并保存。
+
+    为什么不用仅附件：任务“文件”页签里有附件，不代表用户在描述里能直接看到证据。
+    本函数走真实 CKEditor 图像上传按钮，等待图片 src 从占位 GIF 变为可访问 URL，
+    保存后重新读取 field016/desc_rich，并校验图片节点数量。
+
+    返回 dict：
+      requested/skipped/inserted/image_count/verified
+    """
+    image_files = [Path(p) for p in image_paths
+                   if Path(p).suffix.lower() in ('.png', '.jpg', '.jpeg', '.gif', '.webp')]
+    result = {
+        'requested': [p.name for p in image_files],
+        'skipped': [],
+        'inserted': [],
+        'image_count': 0,
+        'verified': False,
+    }
+    if not image_files:
+        result['verified'] = True
+        return result
+
+    base = resolve_settings()['ones_url'].rstrip('/')
+    task_url = f"{base}/project/#/team/{team_uuid}/task/{task_uuid}"
+    if task_uuid not in (page.url or '') or '/task/' not in (page.url or ''):
+        page.goto(task_url, wait_until='domcontentloaded', timeout=60000)
+    wait_app_ready(page, timeout=min(timeout, 20))
+    page.wait_for_timeout(800)
+
+    info = get_task_info(page, team_uuid, task_uuid) or {}
+    fv = {f.get('field_uuid'): f.get('value') for f in (info.get('field_values') or [])}
+    html = str(fv.get('field016') or info.get('desc_rich') or '')
+    existing = _inline_image_names(html)
+    result['image_count'] = len(re.findall(r'<img', html))
+    # 保存后的 field016 可能是占位 data:gif，但查看态 DOM 的 src 会解析为真实文件 URL，
+    # 从查看态补充提取 filename，保证重复执行时能稳定识别已内嵌证据。
+    try:
+        viewer_imgs = page.locator('.richtext-editor-viewer:visible img')
+        for i in range(viewer_imgs.count()):
+            src = viewer_imgs.nth(i).get_attribute('src') or ''
+            existing |= _inline_image_names(src)
+    except Exception:
+        pass
+    if all(p.name in existing for p in image_files):
+        result['skipped'] = [p.name for p in image_files]
+        result['verified'] = True
+        return result
+    todo = [p for p in image_files if p.name not in existing]
+    result['skipped'] = [p.name for p in image_files if p.name in existing]
+    if not todo:
+        result['verified'] = True
+        return result
+    expected_total = result['image_count'] + len(todo)
+
+    viewer = page.locator('.richtext-input-viewer-wrapper:visible').first
+    viewer.wait_for(state='visible', timeout=int(min(timeout, 20) * 1000))
+    viewer.click(timeout=5000)
+    page.wait_for_timeout(500)
+
+    inserted = []
+    try:
+        for path in todo:
+            editor = _visible_description_editor(page)
+            if editor is None:
+                raise RuntimeError('未找到可见的描述富文本编辑器')
+            box = editor.bounding_box() or {}
+            x = max(10, min(20, float(box.get('width') or 40) - 2))
+            y = max(10, min(20, float(box.get('height') or 40) - 2))
+            editor.click(position={'x': x, 'y': y}, timeout=5000)
+            page.keyboard.press('Control+End')
+            page.wait_for_timeout(200)
+
+            editor = _visible_description_editor(page)
+            before_count = editor.locator('.ones-image-figure img').count()
+            with page.expect_file_chooser(timeout=int(min(timeout, 15) * 1000)) as chooser_info:
+                page.locator('a.cke_button__onesimage:visible').first.click(timeout=5000)
+            chooser_info.value.set_files(str(path))
+
+            deadline = _time.time() + max(10.0, float(timeout))
+            uploaded = False
+            last_src = ''
+            while _time.time() < deadline:
+                editor = _visible_description_editor(page)
+                if editor is None:
+                    page.wait_for_timeout(300)
+                    continue
+                imgs = editor.locator('.ones-image-figure img')
+                count = imgs.count()
+                if count > before_count:
+                    image = imgs.nth(count - 1)
+                    last_src = image.get_attribute('src') or ''
+                    loaded = True
+                    if verify_loaded:
+                        try:
+                            loaded = bool(image.evaluate('(e) => !!(e.complete && e.naturalWidth > 0)'))
+                        except Exception:
+                            loaded = False
+                    if last_src.startswith('https://') and 'data:image/gif' not in last_src and loaded:
+                        uploaded = True
+                        break
+                page.wait_for_timeout(400)
+            if not uploaded:
+                raise RuntimeError(f'图片上传未完成: {path.name}; src={last_src[:200]}')
+            inserted.append(path.name)
+
+        editor = _visible_description_editor(page)
+        if editor is None:
+            raise RuntimeError('保存前未找到描述编辑器')
+        real_srcs = []
+        for i in range(editor.locator('.ones-image-figure img').count()):
+            src = editor.locator('.ones-image-figure img').nth(i).get_attribute('src') or ''
+            real_srcs.append(src)
+        if any('data:image/gif' in src for src in real_srcs):
+            raise RuntimeError('保存前仍有图片占位 GIF 未完成上传')
+
+        with page.expect_response(lambda r: '/tasks/update3' in r.url, timeout=int(timeout * 1000)) as response_info:
+            page.get_by_role('button', name='保存', exact=True).last.click(timeout=5000)
+        response = response_info.value
+        if int(response.status) >= 400:
+            raise RuntimeError(f'描述保存失败 HTTP {response.status}: {response.text()[:300]}')
+        page.wait_for_timeout(1000)
+
+        after = get_task_info(page, team_uuid, task_uuid) or {}
+        after_fv = {f.get('field_uuid'): f.get('value') for f in (after.get('field_values') or [])}
+        after_html = str(after_fv.get('field016') or after.get('desc_rich') or '')
+        count = len(re.findall(r'<img', after_html))
+        missing = [] if count >= expected_total else ['图片节点数量不足']
+        result.update({
+            'inserted': inserted,
+            'image_count': count,
+            'verified': not missing,
+            'missing': missing,
+            'after_html': after_html,
+        })
+        if missing:
+            raise RuntimeError(f'保存后描述内图片数量不足: {count}/{expected_total}')
+        return result
+    except Exception:
+        try:
+            page.get_by_role('button', name='取消', exact=True).last.click(timeout=2000)
+        except Exception:
+            pass
+        raise
 
 
 def get_task_attachments(page, team_uuid, task_uuid):

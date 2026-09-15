@@ -99,7 +99,12 @@
 - 附件直传：`upload_task_attachment_api()` 用 `ref_id=<新建 task_uuid>` 调用
   `POST .../res/attachments/upload` 获取 `resource_uuid/token/upload_url`，
   再以 multipart `token + file` 上传。无需打开详情页或“文件”页签。
-- 批量提交顺序：逐条缺陷执行“创建 -> 关联主工单 -> 直传并校验该缺陷附件”，
+- 描述内嵌截图：附件上传成功后，对图片文件调用
+  `append_task_description_images(page, team, task_uuid, image_files)`。
+  该函数走真实 CKEditor 图像按钮上传到描述，等待图片完成并保存，随后重新读取
+  `field016/desc_rich` 校验图片节点数。默认在 `ones_submit_defects.py` 中自动执行，
+  `--no-inline-evidence` 可显式关闭。
+- 批量提交顺序：逐条缺陷执行“创建 -> 关联主工单 -> 直传并校验该缺陷附件 -> 描述内嵌图片并回读”，
   任一步失败即带 uuid 停止，避免后续缺陷继续创建导致张冠李戴。
 - UI 与 API 对比：页面“新增关联工作项”最终仍是创建 + 关联后端动作，额外有弹窗渲染/字段联动；
   直连 API 少一层 UI 等待，当前按“最快且可核验”的主路径使用。
@@ -118,10 +123,13 @@
 ## 描述编辑器（CKEditor）
 
 - 清空模板：点击编辑器 → Ctrl+A → Backspace → 输入内容。
-- 粘贴证据截图：CDP `Browser.grantPermissions` 授予 `clipboardReadWrite` →
-  `navigator.clipboard.write([new ClipboardItem({'image/png': file})])` →
-  光标放编辑器末尾 → Ctrl+V。粘贴后等 6~8s 上传完成
-  （未完成时是 15×15 占位 GIF，发送前确认 src 非 data:image/gif）。
+- 内嵌截图（稳定版）：使用 `append_task_description_images()`。它执行：
+  点击描述区域进入编辑态 → 点击 `a.cke_button__onesimage` → 在文件选择器中设置图片 →
+  轮询编辑器中的 `.ones-image-figure img` 直到 `src` 为 https 且图片已加载 → 点击“保存”等待 `tasks/update3` →
+  重新读取任务描述并校验 `<img>` 节点数量。该函数按图片节点数量做幂等，重复调用不会重复插入。
+- ONES 的一个特殊点：保存后的 `field016` 可能仍保留 `data:image/gif` 占位 src，查看态通过
+  `data-uuid`/`data-ref-id` 解析真实图片。因此验证应以查看态的 `.richtext-editor-viewer img`
+  数量、`complete && naturalWidth > 0` 为准，不要只看保存后的 HTML src。
 - 删除多余图片：DOM `img.remove()`（连空容器）后执行 `CKEDITOR.instances.editor2.setData(getData())` 同步。
 - 若用 `execCommand('insertHTML')` 整体注入内容，发送按钮可能保持禁用：末尾输入一个空格再 Backspace 触发 onChange 即可。
 

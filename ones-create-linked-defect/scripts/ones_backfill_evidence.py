@@ -3,6 +3,9 @@
 
 用法:
     python scripts/ones_backfill_evidence.py --team 2YPZxEgX --defect <缺陷uuid> 文件1 文件2 ...
+
+默认：附件补传后，图片证据会继续内嵌到缺陷描述并回读验证；
+     只需附件时加 --no-inline。
 """
 import argparse
 import sys
@@ -10,7 +13,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ones_helpers import connect, disconnect, resolve_settings
+from ones_helpers import connect, disconnect, resolve_settings, append_task_description_images
 from qa_skill_common.bbt_helpers import wait_app_ready
 
 
@@ -70,6 +73,8 @@ def main():
     ap.add_argument("--team", required=True)
     ap.add_argument("--defect", required=True, help="缺陷任务 uuid")
     ap.add_argument("files", nargs="+", help="要补传的文件路径")
+    ap.add_argument("--no-inline", action="store_true", help="只补传附件，不把截图内嵌到描述")
+    ap.add_argument("--inline-timeout", type=float, default=90, help="描述内嵌图片超时秒数")
     args = ap.parse_args()
 
     missing = [f for f in args.files if not Path(f).exists()]
@@ -80,6 +85,20 @@ def main():
     try:
         ok, msg = attach_files(page, args.team, args.defect, args.files)
         print(f"补传结果: {ok} {msg} ({len(args.files)} 个文件)")
+        if ok and not args.no_inline:
+            images = [Path(f) for f in args.files
+                      if Path(f).suffix.lower() in ('.png', '.jpg', '.jpeg', '.gif', '.webp')]
+            if images:
+                result = append_task_description_images(
+                    page, args.team, args.defect, images, timeout=args.inline_timeout,
+                )
+                print(
+                    "描述内嵌图片: " + (
+                        f"OK，新增 {len(result.get('inserted') or [])}，"
+                        f"跳过 {len(result.get('skipped') or [])}，"
+                        f"共 {result.get('image_count')} 张"
+                    )
+                )
     finally:
         disconnect(pw)
 

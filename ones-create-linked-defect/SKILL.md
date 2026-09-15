@@ -95,9 +95,11 @@ description: >-
         处理人按 UI 前端→前端人员、其余→后端人员规则），
         提交前会校验缺陷类型必填字段，缺值直接报字段名，不复制历史缺陷兜底。
         再调用 `create_linked_defect()` 创建并关联，随后立即调用
-        `upload_task_attachment_api()` 将本条证据直传到刚创建的 task_uuid；
+        `upload_task_attachment_api()` 将本条证据直传到刚创建的 task_uuid，并调用
+        `append_task_description_images()` 把图片证据内嵌到描述富文本；
         或直接用 `ones_submit_defects.py --profile <项目> --bug-report <清单> --work-order <工单URL>` 批量提交。
-        批量执行顺序固定为“单条创建 -> 关联 -> 证据校验完成”，失败时保留 uuid 并停止后续建单。
+        批量执行顺序固定为“单条创建 -> 关联 -> 附件核验 -> 描述内嵌截图核验”，
+        失败时保留 uuid 并停止后续建单。默认必须内嵌；仅明确不需要时加 `--no-inline-evidence`。
      **处理人选择规则（必读）**：
      - UI 展示/交互类缺陷（字段显示、字段带出、界面交互、样式）→ 提缺陷命令加 `--handler frontend`，处理人提前端人员；
      - 数据/逻辑/后端类缺陷 → 默认 `--handler backend`（或省略），处理人提后端人员。
@@ -111,9 +113,11 @@ description: >-
      来源项目、系统环境、功能模块（新）、产品负责人、负责人/验证人、处理人、优先级。
      **严重程度默认「一般」；负责人(field004)、验证人(Sg5vqjRr) 固定为当前 ONES 登录账号**
      （黑盒测试报告里的 P0~P4 严重程度只给测试人员自用，不作为 ONES 缺陷定级依据）。
-   - 描述：CKEditor 清空模板 → 输入缺陷内容 → 粘贴证据截图。
+   - 描述：CKEditor 清空模板 → 输入缺陷内容；截图用图像按钮或
+     `append_task_description_images()` 内嵌到富文本，不能只停留在“文件”页签附件。
    - 导入类缺陷上传复现 Excel：优先走 `upload_task_attachment_api()` 直传接口；
-     UI 文件区上传仅作兜底。附件必须绑定到刚创建缺陷的 `task_uuid`，并以附件接口新增 uuid 核验。
+     UI 文件区上传仅作兜底。附件必须绑定到刚创建缺陷的 `task_uuid`，并以附件接口新增 uuid 核验；
+     图片证据还需内嵌到描述，保存后重新加载确认图片节点真实渲染。
    - 提交前给用户确认，再点"确定"；提交后断言弹窗关闭 + 关联内容数量 +1，
      并用 `list_related_tasks()` + `dedup_check()` 查重，发现同标题重复立即提示处理。
 4. **回归后处理缺陷单**（清单"回归验证"为准）：
@@ -132,6 +136,7 @@ description: >-
   （`ones_helpers.defect_dialog_index()`）。
 - 表单字段定位必须限定在新建缺陷弹窗子树内按叶子文本匹配：「产品负责人」「负责人」在工单抽屉与弹窗里同名，全文档搜会选错字段。
 - 证据截图必须与所报功能匹配（人员资质/排产数据等目录不同，贴错会被用户退回）。
+- 描述内嵌截图与附件是两步：附件接口成功只代表“文件”页签有文件，描述正文仍可能看不到证据；提缺陷后必须再内嵌图片并回读验证。保存后的 ONES HTML 可能保留 `data:image/gif` 占位符，查看态靠 `data-uuid` 解析，不能用 src 是否 gif 判断最终失败。
 - 下拉选项异步加载且 teleport 到 body：聚焦搜索输入框输入关键词后
   轮询 body 级 `.ones-select-dropdown [class*=option]` 再点击；
   选项 uuid 从虚拟列表 `List` fiber 的 `memoizedProps.data[].value` 拿
@@ -148,6 +153,6 @@ description: >-
 
 ## 资源
 
-- 脚本：`scripts/` 下 `check_env.py`（自检）、`ones_bootstrap.py`（一键引导）、`ones_edge_server.py` / `edge_session_setup.py`（常驻浏览器/登录态）、`ones_submit_defects.py`（批量提缺陷 CLI）、`ones_project_setup.py`（新项目接入）、`ones_backfill_evidence.py`（证据回填）、`ones_config.py`（配置）、`ones_helpers.py`（CDP + ONES 接口/弹窗封装）。
+- 脚本：`scripts/` 下 `check_env.py`（自检）、`ones_bootstrap.py`（一键引导）、`ones_edge_server.py` / `edge_session_setup.py`（常驻浏览器/登录态）、`ones_submit_defects.py`（批量提缺陷 CLI）、`ones_project_setup.py`（新项目接入）、`ones_backfill_evidence.py`（附件+描述内嵌截图回填）、`ones_config.py`（配置）、`ones_helpers.py`（CDP + ONES 接口/弹窗封装）。
 - 配置：`config/settings.yaml`（环境/浏览器）、`config/field-mapping.yaml`（字段映射与证据目录）。
 - 文档：`references/ones-ui.md`（选择器速查、字段映射、编辑器/上传、状态流转）、`scripts/qa_skill_common/references/{environment,bug-report,datagrip}.md`。
