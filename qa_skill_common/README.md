@@ -14,7 +14,7 @@
 | `bbt_osd_setup.py` | 产品、工艺路线、工序与 BOM 的一次性造数入口 |
 | `phase_runner.py` | 分阶段执行、弹窗 micro-case 批处理、用例检查点、数据台账、恢复执行与失败分级 |
 | `preflight.py` | 通用预检（URL、活动页签、控件类型、按钮状态） |
-| `session_helpers.py` | 普通会话与持久 MES 会话（CDP 9222）管理 |
+| `session_helpers.py` | 普通会话与持久 MES 会话（CDP 9222）管理；CDP 健康检查、受管 PID 回收、自动重启与检查点恢复配合 |
 | `recon_generic/` | 页面、弹窗、下拉与主子表的四个参数化侦察命令 |
 | `import_helpers.py` | 导入边界框架：混合文件、部分成功、失败文件下载与解析 |
 | `field_contracts.py` | 页面字段到接口参数的契约注册表 |

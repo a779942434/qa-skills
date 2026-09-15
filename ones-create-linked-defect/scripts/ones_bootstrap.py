@@ -15,7 +15,6 @@
 import argparse
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -32,16 +31,9 @@ def _port_in_use(port):
 
 
 def _cdp_ready(port, timeout=60):
-    import urllib.request
+    from qa_skill_common.session_helpers import wait_cdp_healthy
 
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2):
-                return True
-        except Exception:  # noqa: BLE001
-            time.sleep(1.5)
-    return False
+    return wait_cdp_healthy(f"http://127.0.0.1:{int(port)}", timeout=timeout).ok
 
 
 def run_selfcheck():
@@ -71,11 +63,27 @@ def main():
         return rc
 
     print("\n== 第 2 步：常驻浏览器 ==")
+    from qa_skill_common.session_helpers import cdp_health
+
+    health = cdp_health(f"http://127.0.0.1:{port}", timeout=1.0)
+    if health.ok:
+        try:
+            from ones_edge_server import _pid_alive, _read_server_meta
+
+            meta = _read_server_meta(settings)
+            supervisor_alive = _pid_alive(meta.get("pid"))
+        except Exception:
+            supervisor_alive = False
+        if supervisor_alive:
+            print(f"  [SKIP] CDP {port} 与健康监管器均在运行，可直接复用。")
+            print("\n完成。后续提缺陷命令示例：")
+            print("  python scripts/ones_submit_defects.py --bug-report <清单.md> --work-order <工单URL> --profile <项目名>")
+            return 0
+        print(f"  [ADOPT] CDP {port} 已运行但未发现健康监管器；将启动监管器接管自动恢复。")
     if _port_in_use(port):
-        print(f"  [SKIP] CDP {port} 已在运行，可直接复用（ones_helpers.connect()）。")
-        print("\n完成。后续提缺陷命令示例：")
-        print("  python scripts/ones_submit_defects.py --bug-report <清单.md> --work-order <工单URL> --profile <项目名>")
-        return 0
+        if not health.ok:
+            print(f"  [RECOVER] CDP {port} 端口被占用但健康检查失败：{health.error}")
+        print("  将由 ones_edge_server 回收受管 PID 并自动重启；不会杀未知外部进程。")
 
     cmd = [sys.executable, str(server)]
     if args.visible:

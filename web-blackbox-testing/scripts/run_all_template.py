@@ -54,7 +54,7 @@ from bbt_helpers import (  # noqa: E402
 )
 from report_gen import gen_report  # noqa: E402
 from session_helpers import (  # noqa: E402
-    close_session, connect_session, ensure_mes_session, stop_persistent_session,
+    cdp_health, connect_session, ensure_mes_session, stop_persistent_session,
 )
 
 # ============================ CONFIG（按任务改） ============================
@@ -227,7 +227,9 @@ def main():
     summary = state.summary()
     keep_session = False
     try:
-        if args.connect:
+        if args.connect and cdp_health(
+            f"http://127.0.0.1:{CONFIG['cdp_port']}", timeout=1.0,
+        ).ok:
             pw, browser, ctx, page = connect_session(
                 cdp_url=f"http://127.0.0.1:{CONFIG['cdp_port']}",
                 url_contains=None,
@@ -243,6 +245,16 @@ def main():
                 cdp_port=CONFIG["cdp_port"],
                 session_dir=CONFIG["session_dir"] or None,
                 login=True,
+                auto_restart=True,
+                restart_attempts=2,
+            )
+        if persistent and persistent.recoveries_this_run:
+            state.meta["session_restarts"] = int(persistent.recoveries_this_run)
+            state.meta["last_restart_error"] = persistent.last_health_error
+            state.save()
+            print(
+                f"[run_all] 本轮持久浏览器已自动恢复 {persistent.recoveries_this_run} 次；"
+                f"检查点继续使用 {state.state_path}"
             )
         configure_page_timeouts(page)
 

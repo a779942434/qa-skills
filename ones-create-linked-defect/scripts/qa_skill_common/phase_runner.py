@@ -22,8 +22,12 @@ from typing import Any, Callable, Iterable
 from .preflight import PreflightCheck, PreflightRunner
 
 try:  # 未安装 Playwright 时仍可导入本模块做离线测试
+    from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 except Exception:  # pragma: no cover
+    class PlaywrightError(Exception):
+        pass
+
     class PlaywrightTimeoutError(Exception):
         pass
 
@@ -66,7 +70,8 @@ def normalize_status(value: Any) -> str:
 
 def classify_exception(exc: BaseException) -> str:
     """返回 infrastructure 或 business。"""
-    if isinstance(exc, (InfrastructureAbort, PlaywrightTimeoutError, ConnectionError, TimeoutError)):
+    if isinstance(exc, (InfrastructureAbort, PlaywrightError, PlaywrightTimeoutError,
+                        ConnectionError, TimeoutError)):
         return "infrastructure"
     return "business"
 

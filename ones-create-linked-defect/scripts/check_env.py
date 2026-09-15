@@ -17,7 +17,6 @@
 退出码：存在 FAIL 返回 1，否则返回 0。
 环境与全部变量的总表见 scripts/qa_skill_common/references/environment.md。
 """
-import socket
 import sys
 from pathlib import Path
 
@@ -26,13 +25,8 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from qa_skill_common import env_check as ec  # noqa: E402
+from qa_skill_common.session_helpers import cdp_health  # noqa: E402
 from ones_config import load_field_mapping, resolve_settings  # noqa: E402
-
-
-def port_open(port):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(1)
-        return sock.connect_ex(("127.0.0.1", port)) == 0
 
 
 def main():
@@ -84,10 +78,26 @@ def main():
 
         # 4. CDP 端口
         port = settings["cdp_port"]
+        health = cdp_health(f"http://127.0.0.1:{port}", timeout=1.0)
         results.append(
-            ec.ok(f"CDP {port} 已就绪", "常驻浏览器运行中")
-            if port_open(port)
-            else ec.warn(f"CDP {port} 已就绪", "未启动", "运行 python scripts/ones_bootstrap.py --apply")
+            ec.ok(f"CDP {port} 健康", health.browser or "常驻浏览器运行中")
+            if health.ok
+            else ec.warn(
+                f"CDP {port} 健康",
+                health.error or "未启动",
+                "运行 python scripts/ones_bootstrap.py --apply 自动启动/恢复",
+            )
+        )
+        try:
+            from ones_edge_server import _pid_alive, _read_server_meta
+
+            supervisor_alive = _pid_alive(_read_server_meta(settings).get("pid"))
+        except Exception:
+            supervisor_alive = False
+        results.append(
+            ec.ok("Edge 健康监管器", "运行中")
+            if supervisor_alive
+            else ec.warn("Edge 健康监管器", "未运行", "运行 ones_bootstrap.py --apply 启动自动恢复")
         )
 
         # 5. 缺陷清单目录

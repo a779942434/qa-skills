@@ -20,6 +20,7 @@ from playwright.sync_api import sync_playwright
 
 from ones_config import resolve_settings
 from qa_skill_common.bbt_helpers import wait_any, wait_gone, wait_dialog_open, wait_app_ready
+from qa_skill_common.session_helpers import cdp_health, wait_cdp_healthy
 
 
 def _cdp_url():
@@ -39,26 +40,61 @@ def _find_page(ctx, url_contains=None):
     return None
 
 
-def connect(url_contains="ones.shuyilink.com"):
+def connect(url_contains="ones.shuyilink.com", recover=True):
     """连接常驻浏览器并复用已有 ONES 页面，避免重复多开工单页/弹窗。
 
     执行完只用 disconnect(pw) 断开，不关闭浏览器窗口。
+    CDP 假死或 Edge 意外退出时，交给 ones_edge_server 监管器自动重启/等待恢复，
+    客户端自身不杀进程，避免与监管器抢重启。
     """
+    settings = resolve_settings()
     url = _cdp_url()
-    try:
-        pw = sync_playwright().start()
-        browser = pw.chromium.connect_over_cdp(url, timeout=20000)
-    except Exception as exc:
-        raise SystemExit(
-            f"连接 CDP {url} 失败：{exc}\n"
-            "请先启动常驻浏览器：python scripts/ones_edge_server.py [工单URL]\n"
-            "（若首次运行，脚本会自动准备本机 Edge 登录态）"
-        ) from exc
-    ctx = browser.contexts[0] if browser.contexts else browser.new_context()
-    page = _find_page(ctx, url_contains=url_contains)
-    if page is None:
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
-    return pw, browser, ctx, page
+    attempts = 2 if recover else 1
+    last_error = None
+    if recover:
+        try:
+            from ones_edge_server import ensure_server_process
+            _started, healthy, meta = ensure_server_process(
+                url=settings["ones_url"], visible=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            healthy = False
+            meta = {}
+        if not healthy:
+            raise SystemExit(
+                f"CDP {url} 不健康且监管器未能恢复。\n"
+                f"监管器状态: {meta}\n"
+                "请查看 logs/ones_edge_server.log 与 bootstrap_edge.log。"
+            ) from last_error
+    for attempt in range(attempts):
+        if not cdp_health(url, timeout=1.0).ok:
+            wait_cdp_healthy(url, timeout=45.0)
+
+        pw = None
+        try:
+            pw = sync_playwright().start()
+            browser = pw.chromium.connect_over_cdp(url, timeout=20000)
+            ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+            page = _find_page(ctx, url_contains=url_contains)
+            if page is None:
+                page = ctx.pages[0] if ctx.pages else ctx.new_page()
+            return pw, browser, ctx, page
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            try:
+                if pw is not None:
+                    pw.stop()
+            except Exception:
+                pass
+            if attempt >= attempts - 1:
+                break
+            # 给后台监管器时间完成自动重启，再连接一次；客户端不终止 Edge。
+            wait_cdp_healthy(url, timeout=45.0)
+    raise SystemExit(
+        f"连接 CDP {url} 失败：{last_error}\n"
+        "守卫进程会自动检查并重启专用 Edge；仍失败时请查看 ones_edge_server.log。"
+    ) from last_error
 
 
 def disconnect(pw):

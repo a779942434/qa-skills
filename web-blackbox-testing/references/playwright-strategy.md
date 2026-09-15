@@ -53,7 +53,11 @@ result = wait_result_or_closed(page, dlg, ["成功", "失败", "已存在"])
 
 长任务不得因一次定位错误重新登录、从第一条用例重跑。总入口采用：
 
-1. **持久会话**：MES 使用独立用户数据目录和 CDP 9222；ONES 继续使用 9334，互不干扰。已有会话优先复用。
+1. **持久会话**：MES 使用独立用户数据目录和 CDP 9222；ONES 继续使用 9334，互不干扰。已有会话优先复用；禁止让自动化 Edge 与用户正在使用的 Edge 共用同一 profile。
+   - 启动前检查 `/json/version` + `/json/list`，不能只看端口是否监听；假死端口不视为可用。
+   - `session.json` 只回收标记为 managed 的旧 PID；没有受管元数据时绝不误杀未知浏览器。
+   - 崩溃参数统一包含 `--disable-session-crashed-bubble`、`--hide-crash-restore-bubble`、`--disable-crash-reporter`，降低恢复气泡/系统崩溃提示干扰。
+   - `ensure_mes_session` 在 CDP 连接断开时自动重启并复用同一 profile；重启次数写入 `run_state.json.meta`，`--resume` 不新增登录、不重复已完成用例。
 2. **预检先行**：创建业务数据前先执行 `preflight`，检查直达 URL、活动页签、关键控件类型和按钮状态；关键预检失败直接阻塞当前阶段。
 3. **阶段顺序**：`bootstrap → recon → data-setup → core-flow → exceptions → non-core → finalize`；阶段间用 `depends_on` 声明依赖，数据依赖用 `provides_data` / `requires_data` 声明。
 4. **检查点粒度**：每条用例结束写 `run_state.json`；业务单号、生成单据等写 `data_ledger.json`。二者不得包含密码、Cookie、Token。

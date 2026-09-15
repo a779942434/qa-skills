@@ -10,6 +10,9 @@
 - 启动浏览器：`python scripts/ones_edge_server.py [工单URL]`，脚本会先确保会话目录，
   再用本机 Edge 本体启动（v20 Cookie 只能由 Edge 本体解密），CDP 端口默认 9334
   （`config/settings.yaml` 的 `cdp_port`）。
+- 监管与恢复：服务周期检查 `/json/version` + `/json/list`；端口假死或 Edge 意外退出时自动重启同一
+  受管 profile 并恢复 ONES 页面。启动参数固定抑制“崩溃恢复气泡”，客户端 `ones_helpers.connect()`
+  只重连、不杀进程；默认最多恢复 3 次（`--max-restarts 0` 表示无限）。
 - 首次若跳 `accounts.feishu.cn` 登录页：以**实际弹出的授权账号/组织**为准（不要预设姓名或公司），点击"授权"回跳；不要重复扫码。
 - 相关 Cookie 域名：`.feishu.cn`（session/session_list/sl_session）、`.ones.shuyilink.com`（ones-lt/ones-uid/ct）。
 

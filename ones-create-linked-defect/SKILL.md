@@ -58,6 +58,8 @@ description: >-
 2. 常驻浏览器已登录 ONES（CDP 默认 9334）。未启动时执行
    `python scripts/ones_edge_server.py [工单URL]`——默认**后台静默启动**（headless，不弹窗），
    脚本会自动准备登录态（复制本机 Edge 登录态，v20 Cookie 只能由 Edge 本体解密）并启动浏览器。
+   监管器每 5 秒检查 `/json/version` + `/json/list`；Edge 假死/意外退出时自动重启同一受管 profile，
+   默认最多自动恢复 3 次，可用 `--max-restarts 0` 改为无限。
    首次登录/飞书授权需可见窗口时加 `--visible` 参数，点击"授权"完成 SSO，后续即可静默运行。
 3. 本地缺陷清单在 `<产物根>/bug-reports/YYYY-MM-DD_功能名_缺陷清单.md`
    （产物根与查找顺序见 [environment.md](scripts/qa_skill_common/references/environment.md)；
@@ -85,7 +87,7 @@ description: >-
 
 ## 工作流
 
-1. **连接浏览器**：`scripts/ones_helpers.py` 的 `connect()` 连 CDP（默认 9334）并**复用已有 ONES 页面**；若跳转飞书授权页，点击"授权"完成 SSO。不要重复打开多个 ONES 工单页/弹窗，避免常驻浏览器标签页越积越多。
+1. **连接浏览器**：`scripts/ones_helpers.py` 的 `connect()` 连 CDP（默认 9334）并**复用已有 ONES 页面**；CDP 不健康时由 `ones_edge_server` 监管器自动重启，客户端只等待/重连，不自行杀 Edge。若跳转飞书授权页，点击"授权"完成 SSO。不要重复打开多个 ONES 工单页/弹窗，避免常驻浏览器标签页越积越多。
 2. **打开工单**：访问用户给的工单 URL（任务 UUID 在 URL 尾部），读取标题与 ID（如 #200710 排产数据回传），据此定位本地缺陷清单文档。读字段只用 `get_task_required_fields()` 提取后续建缺陷的必填字段，**不要打印/搬运完整 `field_values` 或描述富文本**。
 3. **新建关联缺陷**（若清单里有未登记的缺陷）：
    - **优先 API 直连提交（混合模式）**：
