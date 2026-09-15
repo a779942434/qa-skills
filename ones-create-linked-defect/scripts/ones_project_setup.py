@@ -16,11 +16,11 @@ import yaml
 from ones_config import PROJECT_ROOT
 from ones_helpers import (
     _api,
-    capture_field_options_fiber,
     connect,
     disconnect,
+    get_issue_type_fields,
+    get_issue_type_scope,
     get_parent_context,
-    open_defect_form,
 )
 
 
@@ -36,7 +36,7 @@ def main():
     ap.add_argument("--work-order", required=True)
     ap.add_argument("--profile", required=True, help="field-mapping.yaml 里的新 profile 名")
     ap.add_argument("--env-keyword", default="", help="系统环境搜索关键词（如 <环境关键词>），用于捕获系统环境 uuid")
-    ap.add_argument("--sample-defect", default="", help="同团队任一历史缺陷 uuid，用于取 issue_type_scope_uuid")
+    ap.add_argument("--sample-defect", default="", help="可选兜底：同团队任一历史缺陷 uuid；常规无需提供")
     ap.add_argument("--site-url", default="", help="被测系统地址（可选）")
     ap.add_argument("--dry-run", action="store_true", help="只打印将写入的 profile，不落盘")
     args = ap.parse_args()
@@ -62,25 +62,33 @@ def main():
             },
         }
 
-        if args.env_keyword:
-            dlg = open_defect_form(page, team, task, req["summary"] or "")
-            opts = capture_field_options_fiber(page, "系统环境", args.env_keyword)
-            env = next((o for o in opts if args.env_keyword in o["text"]), None)
-            if env:
-                profile["system_env"] = {"keyword": args.env_keyword, "name": env["text"], "option_uuid": env["uuid"]}
-                print("系统环境:", env["text"], env["uuid"])
-            else:
-                print("[警告] 未匹配到系统环境选项，请检查 --env-keyword 或手工补")
-
-        if args.sample_defect:
-            sr = _api(page, "POST", f"/project/api/project/team/{team}/tasks/info", {"ids": [args.sample_defect]})
-            st = (sr or {}).get("tasks", [{}])[0]
-            scope = st.get("issue_type_scope_uuid")
-            if scope:
-                profile["issue_type_scope_uuid"] = scope
-                print("缺陷 scope:", scope)
-            else:
-                print("[警告] 样例缺陷未取到 issue_type_scope_uuid")
+        try:
+            scope = get_issue_type_scope(page, team, req.get("project_uuid"))
+            scope_source = "按项目+缺陷类型自动发现"
+        except Exception:
+            scope = ""
+            if args.sample_defect:
+                sr = _api(page, "POST", f"/project/api/project/team/{team}/tasks/info", {"ids": [args.sample_defect]})
+                st = (sr or {}).get("tasks", [{}])[0]
+                scope = st.get("issue_type_scope_uuid")
+                scope_source = "样例缺陷兜底"
+        if scope:
+            profile["issue_type_scope_uuid"] = scope
+            print("缺陷 scope:", scope, f"({scope_source})")
+            field_defs = get_issue_type_fields(page, team, scope)
+            env_field = next((f for f in field_defs if f.get("uuid") == "R3UqL3Vm"), None)
+            if args.env_keyword and env_field:
+                matches = [o for o in (env_field.get("options") or []) if args.env_keyword in str(o.get("value") or "")]
+                if len(matches) == 1:
+                    env = matches[0]
+                    profile["system_env"] = {"keyword": args.env_keyword, "name": env.get("value"), "option_uuid": env.get("uuid")}
+                    print("系统环境:", env.get("value"), env.get("uuid"))
+                elif not matches:
+                    print("[警告] 未匹配到系统环境选项，请检查 --env-keyword 或手工补")
+                else:
+                    print("[警告] 系统环境关键词匹配多个选项，请改用更精确的关键词:", [o.get("value") for o in matches])
+        else:
+            print("[警告] 未取到 issue_type_scope_uuid，请重试或提供 --sample-defect")
 
         if args.dry_run:
             print("=== dry-run profile ===")

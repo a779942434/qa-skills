@@ -63,7 +63,7 @@ evidence_dirs: {}
 #     option_uuid: "<功能模块字段选项uuid>"
 #   priority: "P2"
 #   priority_uuid: "<优先级字段选项uuid>"
-#   issue_type_scope_uuid: "<缺陷工作项类型scope>"
+#   issue_type_scope_uuid: "<可选缓存；缺失时按项目+缺陷类型自动发现>"
 #   people:
 #     product_owner_uuid: "<产品负责人uuid>"
 #     assignee: "<负责人/验证人>"

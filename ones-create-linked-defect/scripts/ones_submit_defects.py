@@ -2,13 +2,15 @@
 """ONES 一键提缺陷 CLI（整合字段缓存 + 登录账号 + 默认严重程度 + 页面复用）。
 
 用法:
-    python scripts/ones_submit_defects.py --bug-report <缺陷清单.md> --work-order <工单URL> --profile <项目名>
+    python scripts/ones_submit_defects.py --bug-report <缺陷清单.md> --work-order <工单URL>
+        [--profile <项目名>] [--system-env <环境名或uuid>]
 
 优化点:
     - 只用 get_task_required_fields() 提取建缺陷必填字段，不搬运完整描述；
     - 负责人/验证人自动取当前 ONES 登录账号（get_current_user）；
     - 严重程度默认「一般」（黑盒报告的 S1~S4 仅自用，不据此定级）；
-    - issue_type_scope_uuid 优先从 profile 读取（换项目只改 field-mapping.yaml）。
+    - issue_type_scope_uuid 优先从 profile 读取，缺失时按项目+缺陷类型直接发现；
+    - 不再依赖“先找一张历史缺陷再复制”，历史缺陷只保留为显式兜底。
 """
 import argparse
 import json
@@ -24,15 +26,17 @@ from qa_skill_common.bbt_helpers import wait_app_ready
 from ones_config import load_field_mapping  # noqa: E402
 from ones_helpers import (  # noqa: E402
     DEFAULT_SEVERITY,
-    _api,
     build_defect_fields,
     connect,
     create_linked_defect,
     dedup_check,
     disconnect,
     get_current_user,
+    get_issue_type_fields,
+    get_issue_type_scope,
     get_parent_context,
     list_related_tasks,
+    upload_task_evidences_api,
 )
 
 
@@ -74,7 +78,36 @@ def parse_bug_report(md_path):
     return result["bugs"]
 
 
-def profile_overrides(profile):
+def resolve_option_uuid(field_defs, field_uuid, wanted):
+    """把选项 uuid 或可读名称解析为 uuid；未提供字段定义时按 uuid 原样使用。"""
+    if not wanted:
+        return None
+    if not field_defs:
+        return wanted
+    fd = next((f for f in field_defs if f.get("uuid") == field_uuid), None)
+    if not fd:
+        raise RuntimeError(f"字段定义中未找到 {field_uuid}")
+    options = fd.get("options") or []
+    exact_uuid = [o for o in options if o.get("uuid") == wanted]
+    if exact_uuid:
+        return exact_uuid[0]["uuid"]
+    wanted_l = str(wanted).strip().lower()
+    exact_name = [o for o in options if str(o.get("value") or "").strip().lower() == wanted_l]
+    if len(exact_name) == 1:
+        return exact_name[0]["uuid"]
+    contains = [o for o in options if wanted_l in str(o.get("value") or "").lower()]
+    if len(contains) == 1:
+        return contains[0]["uuid"]
+    if not contains:
+        raise RuntimeError(f"字段 {fd.get('name') or field_uuid} 未找到选项: {wanted}")
+    raise RuntimeError(
+        f"字段 {fd.get('name') or field_uuid} 匹配到多个选项: "
+        + ", ".join(str(o.get("value")) for o in contains)
+    )
+
+
+def profile_overrides(profile, field_defs=None):
+    """将 profile 中的 uuid 或可读名称解析成 field_values 覆盖值。"""
     ov = {}
     if not profile:
         return ov
@@ -82,38 +115,45 @@ def profile_overrides(profile):
     cust = profile.get("source_customer") or {}
     env = profile.get("system_env") or {}
     mod = profile.get("function_module") or {}
-    for fu, v in (
-        ("5nUKjALP", src.get("option_uuid")),
-        ("Jtnem8qs", cust.get("option_uuid")),
-        ("R3UqL3Vm", env.get("option_uuid")),
-        ("W9qkyVXr", mod.get("option_uuid")),
-        ("field012", profile.get("priority_uuid")),
+
+    def first(section):
+        return section.get("option_uuid") or section.get("name") or section.get("keyword")
+
+    for fuuid, wanted in (
+        ("5nUKjALP", first(src)),
+        ("Jtnem8qs", first(cust)),
+        ("R3UqL3Vm", first(env)),
+        ("W9qkyVXr", first(mod)),
+        ("field012", profile.get("priority_uuid") or profile.get("priority")),
     ):
-        if v:
-            ov[fu] = v
+        value = resolve_option_uuid(field_defs, fuuid, wanted)
+        if value:
+            ov[fuuid] = value
     return ov
 
 
 def check_profile(profile):
-    """校验 profile 必需字段是否齐全，返回警告列表。"""
+    """校验 profile 可选字段，返回非阻塞警告列表。"""
     warnings = []
     if not profile:
-        return ["未指定 --profile，字段依赖主工单兜底，缺陷类型 scope 可能缺失"]
+        return ["未指定 --profile；scope 可自动发现，但系统环境等缺陷特有字段需由主工单、--system-env 或 sample 提供"]
     src = profile.get("source_project") or {}
     env = profile.get("system_env") or {}
     mod = profile.get("function_module") or {}
+
+    def has_value(section):
+        return bool(section.get("option_uuid") or section.get("name") or section.get("keyword"))
+
     checks = [
-        ("来源项目 option_uuid", src.get("option_uuid")),
-        ("系统环境 option_uuid", env.get("option_uuid")),
-        ("功能模块 option_uuid", mod.get("option_uuid")),
-        ("优先级 priority_uuid", profile.get("priority_uuid")),
-        ("缺陷类型 issue_type_scope_uuid", profile.get("issue_type_scope_uuid")),
+        ("来源项目 option_uuid/name/keyword", has_value(src)),
+        ("系统环境 option_uuid/name/keyword", has_value(env)),
+        ("功能模块 option_uuid/name/keyword", has_value(mod)),
+        ("优先级 priority_uuid/priority", bool(profile.get("priority_uuid") or profile.get("priority"))),
     ]
-    for label, v in checks:
-        if not v:
+    for label, ok in checks:
+        if not ok:
             warnings.append(f"缺少 {label}")
     return warnings
-
 
 def apply_overrides(field_values, overrides):
     out = []
@@ -164,57 +204,16 @@ def resolve_evidence(bug, base_dirs):
 
 
 def attach_evidence(page, team_uuid, defect_uuid, files):
-    import time as _time
-    from ones_helpers import resolve_settings
-    base = resolve_settings()["ones_url"].rstrip("/")
-    page.goto(f"{base}/project/#/team/{team_uuid}/task/{defect_uuid}", wait_until="domcontentloaded", timeout=60000)
-    wait_app_ready(page)                                   # 替代固定 7s
-    page.evaluate(
-        """() => {
-            let target = null;
-            const walk = (el) => {
-                if (target) return;
-                if (el.childElementCount === 0 && el.textContent && el.textContent.trim() === '文件') { target = el; return; }
-                for (const c of el.children) walk(c);
-            };
-            walk(document.body);
-            if (!target) return false;
-            let p = target;
-            while (p && p !== document.body && !p.onclick && !p.closest('[class*=tab]')) p = p.parentElement;
-            const ct = (p && p !== document.body) ? p : target;
-            ct.click();
-            return true;
-        }"""
-    )
+    """把证据直接绑定到刚创建的 defect_uuid，并以附件接口确认成功。"""
     try:
-        page.wait_for_selector("input.upload-input", timeout=5000)   # 替代固定 3s
-    except Exception:
-        pass
-    up = page.locator("input.upload-input")
-    if up.count() == 0:
-        return False, "未找到上传控件"
-    up.first.set_input_files([str(f) for f in files])
-    page.wait_for_timeout(2500)
-    for _ in range(6):
-        clicked = page.evaluate(
-            """() => {
-                const ds = Array.from(document.querySelectorAll('[role=dialog]'));
-                for (const d of ds) {
-                    const r = d.getBoundingClientRect();
-                    const t = (d.innerText || '');
-                    if (r.width > 0 && r.height > 0 && t.includes('上传文件') && !t.includes('选择关联关系')) {
-                        const btn = Array.from(d.querySelectorAll('button')).find(b => (b.innerText || '').trim() === '确定');
-                        if (btn) { btn.click(); return true; }
-                    }
-                }
-                return false;
-            }"""
+        ok, _data, missing, uploaded = upload_task_evidences_api(
+            page, team_uuid, defect_uuid, files, timeout=90,
         )
-        if clicked:
-            page.wait_for_timeout(3000)
-            return True, "已确认上传"
-        _time.sleep(1)
-    return True, "未出现上传确认弹窗（可能已直接挂载）"
+    except Exception as exc:
+        return False, f"附件接口上传失败: {exc}"
+    if ok:
+        return True, f"附件接口已确认新增 {len(uploaded)} 个文件"
+    return False, f"附件接口超时，缺少: {', '.join(missing)}"
 
 
 def main():
@@ -222,7 +221,8 @@ def main():
     ap.add_argument("--bug-report", required=True, help="缺陷清单 md 路径")
     ap.add_argument("--work-order", required=True, help="ONES 工单 URL")
     ap.add_argument("--profile", default=None, help="field-mapping.yaml 项目段名（如 <项目名>）")
-    ap.add_argument("--sample-defect", default=None, help="可选：字段模板缺陷 uuid")
+    ap.add_argument("--sample-defect", default=None, help="可选：字段模板缺陷 uuid（仅显式兜底，不作为常规前置）")
+    ap.add_argument("--system-env", default=None, help="系统环境名称或选项 uuid；可替代 profile.system_env.option_uuid")
     ap.add_argument("--only", action="append", default=[], help="只提交指定编号，可重复")
     ap.add_argument("--bugs", default="", help="逗号分隔编号，支持数字简写")
     ap.add_argument("--handler", choices=["backend", "frontend"], help="处理人：后端/前端（默认后端；UI 展示/交互类缺陷提前端）")
@@ -259,7 +259,6 @@ def main():
     for b in bugs:
         if feature and not b["title"].startswith("【"):
             b["title"] = f"【{feature}】{b['title']}"
-    overrides = profile_overrides(profile)
     scope_uuid = (profile or {}).get("issue_type_scope_uuid")
     profile_warnings = check_profile(profile)
     br_dir = Path(args.bug_report).resolve().parent
@@ -276,8 +275,6 @@ def main():
         evidence_base.insert(0, str(proj_root / profile["site"]["evidence_dir"]))
 
     print("解析到缺陷:", ", ".join(b["key"] for b in bugs))
-    print("字段覆盖表:", json.dumps(overrides, ensure_ascii=False))
-    print("issue_type_scope_uuid:", scope_uuid or "(未配置)")
     for w in profile_warnings:
         print(f"[警告] {w}")
     if args.dry_run:
@@ -296,13 +293,21 @@ def main():
         current = get_current_user(page)
         print("当前登录账号:", current["name"], current["uuid"], "| 处理人:", handler)
 
-        if not scope_uuid and args.sample_defect:
-            sr = _api(page, "POST", f"/project/api/project/team/{team}/tasks/info", {"ids": [args.sample_defect]})
-            st = (sr or {}).get("tasks", [{}])[0]
-            scope_uuid = st.get("issue_type_scope_uuid")
-            print("样例缺陷 scope:", scope_uuid)
+        if not scope_uuid:
+            scope_uuid = get_issue_type_scope(page, team, req.get("project_uuid"))
+            print("issue_type_scope_uuid: 按项目+缺陷类型自动发现")
+        else:
+            print("issue_type_scope_uuid: profile 配置")
+        print("  scope=", scope_uuid)
 
-        results = []
+        field_defs = get_issue_type_fields(page, team, scope_uuid)
+        overrides = profile_overrides(profile, field_defs)
+        if args.system_env:
+            overrides["R3UqL3Vm"] = resolve_option_uuid(field_defs, "R3UqL3Vm", args.system_env)
+        print("字段覆盖表:", json.dumps(overrides, ensure_ascii=False))
+
+        # 先完成字段与证据预检，避免“已建单但证据缺失”的半成品。
+        prepared = []
         for b in bugs:
             fvs = build_defect_fields(
                 page, team, task, b["title"], b["desc"], handler,
@@ -310,18 +315,32 @@ def main():
                 overrides=overrides,
                 severity_text=args.severity,
                 parent_fv=parent_fv,
+                field_defs=field_defs,
             )
+            files = []
+            if not args.skip_evidence:
+                files, ev_missing = resolve_evidence(b, evidence_base)
+                if ev_missing:
+                    raise RuntimeError(f"{b['key']} 证据文件缺失: {', '.join(ev_missing)}")
+            prepared.append((b, fvs, files))
+
+        results = []
+        for b, fvs, files in prepared:
+            # 创建缺陷、关联主工单、绑定证据按单条缺陷串行完成。
             number, uuid = create_linked_defect(
                 page, team, task, b["title"], fvs,
                 assign=current["uuid"], issue_type_scope_uuid=scope_uuid,
             )
-            print(f"  {b['key']} 已创建 #{number} uuid={uuid}")
+            print(f"  {b['key']} 已创建并关联 #{number} uuid={uuid}")
             results.append({"key": b["key"], "number": number, "uuid": uuid})
-            if not args.skip_evidence:
-                files, _missing = resolve_evidence(b, evidence_base)
-                if files:
-                    ok, msg = attach_evidence(page, team, uuid, files)
-                    print(f"    证据补传: {ok} {msg} ({len(files)} 个文件)")
+            if files:
+                ok, msg = attach_evidence(page, team, uuid, files)
+                print(f"    附件绑定: {ok} {msg} ({len(files)} 个文件)")
+                if not ok:
+                    raise RuntimeError(
+                        f"{b['key']} 已创建并关联 #{number} uuid={uuid}，"
+                        f"但附件未确认，停止后续建单；请勿重复创建，按此 uuid 重试附件"
+                    )
 
         titles = list_related_tasks(page, team, task, req["summary"] or "")
         dup = dedup_check(titles)

@@ -70,12 +70,14 @@ description: >-
 
 换新客户项目时，先做一次字段/选项发现，写入 `config/field-mapping.yaml` 的 profile；之后日常提缺陷只跑 CLI 即可，不再反向工程。
 
-**推荐一键接入**：`python scripts/ones_project_setup.py --work-order <工单URL> --profile <新项目名> [--env-keyword <环境关键词>] [--sample-defect <历史缺陷uuid>]`，
+**推荐一键接入**：`python scripts/ones_project_setup.py --work-order <工单URL> --profile <新项目名> [--env-keyword <环境关键词>]`，
 自动完成下面 1~3 步并写入 profile（`--dry-run` 先看结果不落盘）。
 
-1. 打开一次新建缺陷弹窗（`open_defect_form`），用 `capture_field_options_fiber()` 捕获「系统环境 R3UqL3Vm」的选项 uuid。
+1. 按“项目 + 缺陷类型”直接查询 `issueTypeScopes` 得到 `issue_type_scope_uuid`；
+   **不需要工单已有缺陷，也不需要用历史缺陷复制字段模板**。
 2. 用 `get_task_required_fields()` 从主工单取：来源项目、来源客户、功能模块、产品负责人、优先级、前端/后端人员 uuid。
-3. 缺陷工作项类型 `issue_type_scope_uuid`：从同团队任一历史缺陷 `tasks/info` 读（如 `M33Rzztq`），写入 profile 的 `issue_type_scope_uuid`。
+3. 从缺陷类型字段定义读取「系统环境 R3UqL3Vm」选项，`--env-keyword` 命中唯一项时写入 uuid；
+   后续提交由 `ones_submit_defects.py` 直接用 profile 值组装字段。
 4. 严重程度是全局固定选项，提交默认「一般」；负责人/验证人 = 当前登录账号，运行期自动读取，均无需配置。
 5. 把以上写入 `config/field-mapping.yaml` 的新 profile（参考已有 profile 段）。
 
@@ -87,12 +89,15 @@ description: >-
 2. **打开工单**：访问用户给的工单 URL（任务 UUID 在 URL 尾部），读取标题与 ID（如 #200710 排产数据回传），据此定位本地缺陷清单文档。读字段只用 `get_task_required_fields()` 提取后续建缺陷的必填字段，**不要打印/搬运完整 `field_values` 或描述富文本**。
 3. **新建关联缺陷**（若清单里有未登记的缺陷）：
    - **优先 API 直连提交（混合模式）**：
-     1. 若字段选项 uuid 未缓存，先用 `open_defect_form()` + `capture_field_options_fiber()`
-        探一次「系统环境」等下拉选项的 `{text, uuid}`，
-        写入 `config/field-mapping.yaml` 的 `option_uuids`（同一项目只需一次）；
-     2. 之后全部走 `build_defect_fields()`（主工单取来源项目/功能模块/产品负责人/优先级，
-        同类型缺陷模板取系统环境等；处理人按 UI 前端→前端人员、其余→后端人员规则）
-        + `create_linked_defect()` 创建并关联，或直接用 `ones_submit_defects.py --profile <项目> --bug-report <清单> --work-order <工单URL>` 批量提交。
+     1. 若字段选项 uuid 未缓存，优先用 `ones_project_setup.py --env-keyword` 从字段定义
+        直接解析并写入 profile；仅 GraphQL 字段定义不可用时，才用 UI 下拉捕获兜底。
+     2. 之后全部走 `build_defect_fields()`（主工单取共有字段，profile 取系统环境等缺陷特有字段；
+        处理人按 UI 前端→前端人员、其余→后端人员规则），
+        提交前会校验缺陷类型必填字段，缺值直接报字段名，不复制历史缺陷兜底。
+        再调用 `create_linked_defect()` 创建并关联，随后立即调用
+        `upload_task_attachment_api()` 将本条证据直传到刚创建的 task_uuid；
+        或直接用 `ones_submit_defects.py --profile <项目> --bug-report <清单> --work-order <工单URL>` 批量提交。
+        批量执行顺序固定为“单条创建 -> 关联 -> 证据校验完成”，失败时保留 uuid 并停止后续建单。
      **处理人选择规则（必读）**：
      - UI 展示/交互类缺陷（字段显示、字段带出、界面交互、样式）→ 提缺陷命令加 `--handler frontend`，处理人提前端人员；
      - 数据/逻辑/后端类缺陷 → 默认 `--handler backend`（或省略），处理人提后端人员。
@@ -107,7 +112,8 @@ description: >-
      **严重程度默认「一般」；负责人(field004)、验证人(Sg5vqjRr) 固定为当前 ONES 登录账号**
      （黑盒测试报告里的 P0~P4 严重程度只给测试人员自用，不作为 ONES 缺陷定级依据）。
    - 描述：CKEditor 清空模板 → 输入缺陷内容 → 粘贴证据截图。
-   - 导入类缺陷上传复现 Excel：文件区 `input.upload-input` set_input_files → **点"上传文件"确认弹窗的"确定"**。
+   - 导入类缺陷上传复现 Excel：优先走 `upload_task_attachment_api()` 直传接口；
+     UI 文件区上传仅作兜底。附件必须绑定到刚创建缺陷的 `task_uuid`，并以附件接口新增 uuid 核验。
    - 提交前给用户确认，再点"确定"；提交后断言弹窗关闭 + 关联内容数量 +1，
      并用 `list_related_tasks()` + `dedup_check()` 查重，发现同标题重复立即提示处理。
 4. **回归后处理缺陷单**（清单"回归验证"为准）：
@@ -134,6 +140,8 @@ description: >-
 - 上传文件后必点"上传文件"确认弹窗的"确定"，否则不挂载；
   该确认弹窗判定为「可见 dialog 含`上传文件`且**不含`选择关联关系`**」，
   否则会误点主弹窗"确定"造成提前提交/重复建单（实测踩过）。
+  缺陷已创建后的证据补传，成功判据必须看
+  `GET .../task/{uuid}/attachments?since=0` 是否出现新 attachment uuid，不能靠固定 sleep 或虚拟列表文本。
 - 提交成功不能只看 toast：断言新建缺陷弹窗关闭 + 工单关联内容数量 +1 + 标题出现；同标题重复时告警去重。
 - 缺陷单状态流转：菜单项可能隐藏但已在 DOM（`.ones-menu-item`），点状态输入框触发渲染后 `el.click()` 目标项即可；主工单状态流转见 references。
 - 选择器统一维护在 `references/ones-ui.md` 的"选择器速查"，改动只改一处。

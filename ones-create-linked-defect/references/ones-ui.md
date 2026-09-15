@@ -57,7 +57,7 @@
 | 严重程度 option uuid | 致命 `Dgk6PHkS`、严重 `QYe31Dn9`、一般 `XxwMNPQp`、提示 `A3HEmFsu`、建议 `RDtgWTEi`、保留 `MnAwAecn`（`ones_helpers.SEVERITY`） |
 | 提交默认严重程度 | 一般（`ones_helpers.DEFAULT_SEVERITY`）；黑盒报告的 P0~P4 仅内部自用 |
 | 当前登录账号 | `localStorage.user_id` / `user_name`（`ones_helpers.get_current_user()`），负责人/验证人用它 |
-| 缺陷类型 scope | 从同团队历史缺陷 `tasks/info` 的 `issue_type_scope_uuid` 读（`<scope uuid>`，按实例从历史缺陷读取），写入 profile |
+| 缺陷类型 scope | `POST .../items/graphql?t=issue-type-scopes` 查 `issueTypeScopes`，按 `project.uuid + issueType.uuid` 直接得到；常规无需历史缺陷 |
 | 工作项类型「缺陷」 type uuid | `6FUpniBf`（`issue_type_uuid`，区别于 `issue_type_scope_uuid`） |
 
 ## 字段映射（具体取值见 config/field-mapping.yaml，换项目只改配置）
@@ -89,14 +89,20 @@
 - 关联主工单：`POST /project/api/project/team/{team}/task/{parent_uuid}/related_tasks`，
   body `{"task_uuids":["<新任务uuid>"],"task_link_type_uuid":"UUID0001",
   "link_desc_type":"link_out_desc"}`。
-- 字段模板：从同工单已有缺陷 `POST .../tasks/info` 拿 `field_values` 复制，
-  仅替换 `field001`(标题) 与 `field002`(描述)；严重程度默认「一般」，
-  负责人/验证人默认当前登录账号（`build_defect_fields()` 已内置）。
+- 字段来源：主工单共有字段 + profile 中的缺陷特有字段（系统环境等）；
+  `sample-defect` 仅为显式兜底，不是提交前置，不允许默认拿历史缺陷复制后直接提交。
+  严重程度默认「一般」，负责人/验证人默认当前登录账号（`build_defect_fields()` 已内置）。
 - 处理人字段（缺陷表单）：`95jUV2Mb`；按规则取主工单前端/后端人员 uuid 后写入该字段。
-- 全 API 构建：`ones_helpers.build_defect_fields()` 自动组装字段
-  （主工单接口取来源项目/功能模块/产品负责人/优先级，同类型缺陷模板取系统环境等），
-  仅需传入标题/描述/处理人；`create_linked_defect()` 创建+关联，秒级。
-- 封装：`ones_helpers.get_parent_handlers()`（主工单前端/后端人员）、`build_defect_fields()`（字段构建）、`create_linked_defect()`（创建+关联）。
+- 全 API 构建：`ones_helpers.get_issue_type_scope()` + `get_issue_type_fields()` 解析
+  scope 和字段定义；`build_defect_fields()` 用主工单 + profile/`--system-env` 组装，
+  并在提交前校验必填字段。仅需传入标题/描述/处理人；`create_linked_defect()` 创建+关联，秒级。
+- 附件直传：`upload_task_attachment_api()` 用 `ref_id=<新建 task_uuid>` 调用
+  `POST .../res/attachments/upload` 获取 `resource_uuid/token/upload_url`，
+  再以 multipart `token + file` 上传。无需打开详情页或“文件”页签。
+- 批量提交顺序：逐条缺陷执行“创建 -> 关联主工单 -> 直传并校验该缺陷附件”，
+  任一步失败即带 uuid 停止，避免后续缺陷继续创建导致张冠李戴。
+- UI 与 API 对比：页面“新增关联工作项”最终仍是创建 + 关联后端动作，额外有弹窗渲染/字段联动；
+  直连 API 少一层 UI 等待，当前按“最快且可核验”的主路径使用。
 
 ### 字段选项 UUID 捕获（一次性）
 
@@ -126,7 +132,10 @@
   判定条件：可见 `[role=dialog]` 且文本含`上传文件`且**不含`选择关联关系`**
   （否则会误点主弹窗"确定"，造成提前提交/重复建单，实测踩过）。
   上传成功以 `resource-info-name` 出现为准。
-- 提交后必须回缺陷抽屉「文件」页签核对文件名出现，未挂载就补传（`ones_helpers.upload_evidence()` 已内置确认弹窗判定与核验）。
+- 提交后回缺陷详情「文件」页签补传时，用接口状态而非固定 sleep 判成功：
+  `open_task_file_tab()` 等待 `GET /project/api/project/team/{team}/task/{task_uuid}/attachments?since=0` 返回；
+  点击上传确认后，`wait_new_attachments()` 轮询同一接口，直到期望文件名以**新 attachment uuid** 出现。
+  虚拟列表未渲染、上传控件晚出现都不会再误判失败。
 
 ## 评论（@处理人 + 未修复说明）
 

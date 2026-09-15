@@ -9,6 +9,7 @@
     send_comment(page, team_uuid, task_uuid, rich_html) -> POST send_message
 """
 import json
+import mimetypes
 import time as _time
 import uuid as uuid_mod
 from pathlib import Path
@@ -103,6 +104,78 @@ def get_task_info(page, team_uuid, task_uuid):
     )
 
 
+DEFECT_ISSUE_TYPE_UUID = "6FUpniBf"
+
+
+def get_issue_type_scope(page, team_uuid, project_uuid, issue_type_uuid=DEFECT_ISSUE_TYPE_UUID):
+    """按项目 + 工作项类型直接解析 issue_type_scope_uuid。
+
+    这是替代“先找一张历史缺陷再复制 scope”的稳定路径：历史缺陷不是前置条件，
+    同一项目下是否已有缺陷也不影响创建。一次 GraphQL 查询即可拿到 scope。
+    """
+    query = """query ISSUE_TYPE_SCOPES {
+      issueTypeScopes {
+        uuid
+        name
+        issueType { uuid name }
+        project { uuid }
+      }
+    }"""
+    result = _api(
+        page,
+        "POST",
+        f"/project/api/project/team/{team_uuid}/items/graphql?t=issue-type-scopes",
+        {"query": query, "variables": {}},
+    )
+    if (result or {}).get("errors"):
+        raise RuntimeError(f"查询缺陷类型 scope 失败: {result['errors']}")
+    scopes = (((result or {}).get("data") or {}).get("issueTypeScopes") or [])
+    matches = [
+        s for s in scopes
+        if ((s.get("project") or {}).get("uuid") == project_uuid
+            and ((s.get("issueType") or {}).get("uuid") == issue_type_uuid))
+    ]
+    if len(matches) == 1:
+        return matches[0].get("uuid")
+    if not matches:
+        raise RuntimeError(
+            f"项目中未找到缺陷类型 scope（project={project_uuid}, issue_type={issue_type_uuid}）"
+        )
+    raise RuntimeError(f"项目中缺陷类型 scope 不唯一（project={project_uuid}）：{matches}")
+
+
+def get_issue_type_fields(page, team_uuid, issue_type_scope_uuid):
+    """读取指定缺陷类型 scope 的字段定义（含 required/options/defaultValue）。"""
+    query = """query FIELDS($issueTypeScopeUUID: IssueTypeScopeUUID) {
+      fields(
+        filter: {
+          pool_in: ["task"],
+          context: {
+            type_equal: "issue_type_scope",
+            issueTypeScopeUUID_equal: $issueTypeScopeUUID
+          }
+        }
+      ) {
+        uuid
+        name
+        fieldType
+        required
+        allowEmpty
+        defaultValue
+        options { uuid value }
+      }
+    }"""
+    result = _api(
+        page,
+        "POST",
+        f"/project/api/project/team/{team_uuid}/items/graphql?t=fields",
+        {"query": query, "variables": {"issueTypeScopeUUID": issue_type_scope_uuid}},
+    )
+    if (result or {}).get("errors"):
+        raise RuntimeError(f"查询缺陷字段定义失败: {result['errors']}")
+    return (((result or {}).get("data") or {}).get("fields") or [])
+
+
 # 后续建缺陷真正需要的父工单字段（其余字段如 field002 描述、field016 富文本一律不取，避免搬运大段内容）
 PARENT_REQUIRED_FIELDS = {
     "5nUKjALP": "source_project",     # 来源项目
@@ -123,6 +196,7 @@ def get_task_required_fields(page, team_uuid, task_uuid):
     return {
         "number": info.get("number"),
         "summary": info.get("summary"),
+        "project_uuid": info.get("project_uuid"),
         "owner": info.get("owner"),
         "assign": info.get("assign"),
         "status_uuid": info.get("status_uuid"),
@@ -173,6 +247,7 @@ def get_parent_context(page, team_uuid, task_uuid):
     req = {
         "number": info.get("number"),
         "summary": info.get("summary"),
+        "project_uuid": info.get("project_uuid"),
         "owner": info.get("owner"),
         "assign": info.get("assign"),
         "status_uuid": info.get("status_uuid"),
@@ -235,15 +310,28 @@ def create_linked_defect(page, team_uuid, parent_task_uuid, summary, field_value
         task_payload["issue_type_scope_uuid"] = issue_type_scope_uuid
     payload = {"tasks": [task_payload]}
     created = _api(page, "POST", f"{base}/tasks/add3", payload)
-    task = (created or {}).get("tasks", [{}])[0]
+    tasks = (created or {}).get("tasks") or []
+    if not tasks:
+        raise RuntimeError(f"创建缺陷失败: {created}")
+    task = tasks[0]
     number = task.get("number")
     if not number:
         raise RuntimeError(f"创建缺陷失败: {created}")
-    link = _api(page, "POST", f"{base}/task/{parent_task_uuid}/related_tasks", {
-        "task_uuids": [task_uuid],
-        "task_link_type_uuid": "UUID0001",
-        "link_desc_type": "link_out_desc",
-    })
+    try:
+        link = _api(page, "POST", f"{base}/task/{parent_task_uuid}/related_tasks", {
+            "task_uuids": [task_uuid],
+            "task_link_type_uuid": "UUID0001",
+            "link_desc_type": "link_out_desc",
+        })
+    except Exception as exc:
+        raise RuntimeError(
+            f"缺陷已创建 #{number} uuid={task_uuid}，但关联主工单失败；"
+            f"请勿重复创建，重试关联时使用该 uuid。原因: {exc}"
+        ) from exc
+    if isinstance(link, dict) and link.get("code") not in (None, 200, "200", "OK"):
+        raise RuntimeError(
+            f"缺陷已创建 #{number} uuid={task_uuid}，但关联主工单失败: {link}"
+        )
     return number, task_uuid
 
 
@@ -397,6 +485,149 @@ def set_desc(page, text):
     return name
 
 
+def _attachment_meta(path):
+    """返回 ONES 附件初始化所需元数据；图片尽量补上尺寸。"""
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    meta = {
+        "type": "attachment",
+        "name": path.name,
+        "ref_type": "task",
+        "description": "",
+        "ctype": mime,
+    }
+    if mime.startswith("image/"):
+        try:
+            from PIL import Image  # 可选依赖；缺失时由 ONES 在文件上传后解析尺寸。
+            with Image.open(path) as img:
+                meta["image_width"], meta["image_height"] = img.size
+        except Exception:
+            pass
+    return meta
+
+
+def upload_task_attachment_api(page, team_uuid, task_uuid, file_path, description=""):
+    """直接调用 ONES 文件接口，把单个附件绑定到指定 task_uuid。
+
+    ONES 实际是两段式上传：
+      1. POST `/project/api/project/team/{team}/res/attachments/upload` 申请 token/resource_uuid；
+      2. POST `upload_url`，multipart 字段为 `token` + `file`。
+    不经过详情页和“文件”页签，也不会出现页面串台。
+    """
+    path = Path(file_path).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(f"附件不存在: {path}")
+    meta = _attachment_meta(path)
+    meta["ref_id"] = task_uuid
+    if description:
+        meta["description"] = description
+    init = _api(
+        page,
+        "POST",
+        f"/project/api/project/team/{team_uuid}/res/attachments/upload",
+        meta,
+    ) or {}
+    upload_url = init.get("upload_url")
+    token = init.get("token")
+    resource_uuid = init.get("resource_uuid")
+    if not upload_url or not token or not resource_uuid:
+        raise RuntimeError(f"附件上传初始化失败: {init}")
+    resp = page.request.post(
+        upload_url,
+        multipart={
+            "token": token,
+            "file": {
+                "name": path.name,
+                "mimeType": meta["ctype"],
+                "buffer": path.read_bytes(),
+            },
+        },
+    )
+    if resp.status >= 400:
+        raise RuntimeError(f"附件上传失败 {resp.status}: {resp.text()[:300]}")
+    return resource_uuid
+
+
+def upload_task_evidences_api(page, team_uuid, task_uuid, file_paths, timeout=90):
+    """按指定 task_uuid 顺序上传附件，并以附件接口新增 uuid 校验成功。"""
+    files = [Path(p) for p in file_paths]
+    before = get_task_attachments(page, team_uuid, task_uuid)
+    before_uuids = {a.get("uuid") for a in (before.get("attachments") or []) if a.get("uuid")}
+    uploaded = []
+    for path in files:
+        uploaded.append(upload_task_attachment_api(page, team_uuid, task_uuid, path))
+    expected = [p.name for p in files]
+    ok, data, missing = wait_new_attachments(
+        page, team_uuid, task_uuid, expected,
+        before_uuids=before_uuids, timeout=timeout,
+    )
+    return ok, data, missing, uploaded
+
+
+def get_task_attachments(page, team_uuid, task_uuid):
+    """读取任务附件列表；这是“文件”页签是否真正加载完成的接口真相。"""
+    return _api(
+        page,
+        "GET",
+        f"/project/api/project/team/{team_uuid}/task/{task_uuid}/attachments?since=0",
+    ) or {}
+
+
+def wait_new_attachments(page, team_uuid, task_uuid, expected_names, before_uuids=None, timeout=60, interval=0.8):
+    """轮询附件接口，直到所有期望文件名都作为新附件出现。
+
+    不依赖固定 sleep，也不依赖页面虚拟列表是否已渲染。返回 (ok, 最新响应, 缺失文件名)。
+    """
+    expected = {str(n) for n in expected_names if n}
+    before = set(before_uuids or [])
+    last = {}
+    deadline = _time.time() + max(1, timeout)
+    while True:
+        try:
+            last = get_task_attachments(page, team_uuid, task_uuid)
+        except Exception:
+            last = {}
+        new_items = [
+            a for a in (last.get("attachments") or [])
+            if a.get("uuid") and a.get("uuid") not in before
+        ]
+        present = {a.get("name") for a in new_items}
+        missing = sorted(expected - present)
+        if not missing:
+            return True, last, []
+        remaining = deadline - _time.time()
+        if remaining <= 0:
+            return False, last, missing
+        _time.sleep(min(interval, remaining))
+
+
+def open_task_file_tab(page, team_uuid, task_uuid, timeout=15):
+    """打开任务详情“文件”页签，并以附件接口响应确认页签数据已就绪。
+
+    先复用当前同任务页面，避免每次都 goto 造成整页重载；随后点击页签并等待上传控件。
+    最终以 GET `/task/{uuid}/attachments?since=0` 响应作为数据就绪判据。
+    """
+    base = resolve_settings()["ones_url"].rstrip("/")
+    if task_uuid not in (page.url or "") or "/task/" not in (page.url or ""):
+        page.goto(
+            f"{base}/project/#/team/{team_uuid}/task/{task_uuid}",
+            wait_until="domcontentloaded",
+            timeout=60000,
+        )
+    wait_app_ready(page, timeout=min(timeout, 12))
+    tab = page.locator('.ones-tabs-item[title="文件"]:visible').first
+    if tab.count() == 0:
+        tab = page.locator(".ui-task-detail__tab:visible", has_text="文件").first
+    try:
+        tab.wait_for(state="visible", timeout=timeout * 1000)
+        tab.click(timeout=5000)
+    except Exception:
+        if tab.count() == 0:
+            raise RuntimeError("未找到任务详情“文件”页签")
+        tab.evaluate("el => el.click()")
+    page.wait_for_selector("input.upload-input", state="attached", timeout=timeout * 1000)
+    return get_task_attachments(page, team_uuid, task_uuid)
+
+
 def upload_evidence(page, paths):
     """向新建缺陷弹窗上传证据文件并确认（稳定版）。
 
@@ -412,28 +643,57 @@ def upload_evidence(page, paths):
     up = dlg.locator("input.upload-input")
     if up.count() == 0:
         return False, "未找到上传控件 input.upload-input"
+    names = [Path(p).name for p in paths]
     up.set_input_files([str(p) for p in paths])
-    page.wait_for_timeout(2500)
-    for _ in range(6):
-        clicked = page.evaluate(
-            """() => {
-                const ds = Array.from(document.querySelectorAll('[role=dialog]'));
-                for (const d of ds) {
-                    const r = d.getBoundingClientRect();
-                    const t = (d.innerText || '');
-                    if (r.width > 0 && r.height > 0 && t.includes('上传文件') && !t.includes('选择关联关系')) {
-                        const btn = Array.from(d.querySelectorAll('button')).find(b => (b.innerText || '').trim() === '确定');
-                        if (btn) { btn.click(); return true; }
-                    }
+    confirm_js = """() => {
+        const ds = Array.from(document.querySelectorAll('[role=dialog]'));
+        for (const d of ds) {
+            const r = d.getBoundingClientRect();
+            const t = (d.innerText || '');
+            if (r.width > 0 && r.height > 0 && t.includes('上传文件') && !t.includes('选择关联关系')) {
+                const btn = Array.from(d.querySelectorAll('button')).find(b => (b.innerText || '').trim() === '确定');
+                if (btn) return true;
+            }
+        }
+        return false;
+    }"""
+    try:
+        page.wait_for_function(confirm_js, timeout=20000)
+    except Exception:
+        return False, "等待上传确认弹窗超时"
+    clicked = page.evaluate(
+        """() => {
+            const ds = Array.from(document.querySelectorAll('[role=dialog]'));
+            for (const d of ds) {
+                const r = d.getBoundingClientRect();
+                const t = (d.innerText || '');
+                if (r.width > 0 && r.height > 0 && t.includes('上传文件') && !t.includes('选择关联关系')) {
+                    const btn = Array.from(d.querySelectorAll('button')).find(b => (b.innerText || '').trim() === '确定');
+                    if (btn) { btn.click(); return true; }
                 }
-                return false;
-            }"""
+            }
+            return false;
+        }"""
+    )
+    if not clicked:
+        return False, "未找到上传确认按钮"
+    try:
+        page.wait_for_function(
+            """(names) => {
+                const text = document.body.innerText || '';
+                return names.every(n => text.includes(n)) &&
+                    names.every(n => {
+                        const i = text.indexOf(n);
+                        const tail = text.slice(i, i + 200);
+                        return tail.includes('已上传') || tail.includes('上传成功');
+                    });
+            }""",
+            arg=names,
+            timeout=60000,
         )
-        if clicked:
-            page.wait_for_timeout(3000)
-            return True, "已确认上传"
-        page.wait_for_timeout(1000)
-    return True, "未出现上传确认弹窗（继续）"
+    except Exception:
+        return False, "上传确认后未在页面内观察到全部文件完成"
+    return True, "已确认上传并等待完成"
 
 
 def submit_defect(page, wait=8):
@@ -735,24 +995,17 @@ def dedup_check(titles):
     return {t: c for t, c in Counter(titles).items() if c > 1}
 
 
-def build_defect_fields(page, team_uuid, parent_task_uuid, summary, desc, handler_uuid, sample_defect_uuid=None, overrides=None, severity_text=DEFAULT_SEVERITY, parent_fv=None):
-    """从接口构建缺陷 field_values（全 API，不依赖 UI 弹窗）。
+def build_defect_fields(page, team_uuid, parent_task_uuid, summary, desc, handler_uuid, sample_defect_uuid=None, overrides=None, severity_text=DEFAULT_SEVERITY, parent_fv=None, field_defs=None):
+    """从接口构建缺陷 field_values（全 API，不依赖历史缺陷模板）。
 
-    字段来源：
-        - 主工单 info：来源项目(5nUKjALP)、功能模块(W9qkyVXr)、产品负责人(Wq56Wyjw)、
-          优先级(field012) 等共有字段直接复用主工单值；
-        - 同类型缺陷模板 sample_defect_uuid：系统环境(R3UqL3Vm)、负责人/验证人(Sg5vqjRr)
-          等缺陷类型特有字段（取同工单已有缺陷最稳妥）；
-        - 动态设置：field001=标题、field002=描述、95jUV2Mb=处理人（按 UI/后端规则传入）；
-        - 严重程度等未填字段保持 null（用 ONES 默认值）。
+    字段来源优先级：
+        1. 主工单 info：来源项目、功能模块、产品负责人、优先级等共有字段；
+        2. profile overrides：系统环境等缺陷类型特有字段，显式配置优先；
+        3. 可选 sample_defect_uuid：仅为未配置的历史模板兜底，不应作为常规前置。
 
-    overrides: 可选 dict，字段 uuid -> 值，用于补系统环境(R3UqL3Vm)/严重程度(field038)/
-    验证人(Sg5vqjRr)等缺陷特有字段（无样例缺陷时父工单没有这些字段）。
-    默认规则：
-        - 严重程度 field038 默认「一般」；黑盒测试报告里的 S1~S4 仅自用，不据此定级；
-        - 负责人 field004 / 验证人 Sg5vqjRr = 当前 ONES 登录账号（get_current_user）。
-
-    返回可直接传给 create_linked_defect 的 field_values 数组。
+    动态设置：标题、描述、处理人、负责人/验证人、严重程度。
+    传入 field_defs 时，提交前会校验缺陷类型的必填字段，缺值直接报出字段名，
+    避免盲目复制历史缺陷后把旧环境/旧客户等脏数据带进新缺陷。
     """
     FIELD_TYPES = {
         "field001": 2, "field002": 2, "field016": 20, "5nUKjALP": 1, "W9qkyVXr": 1,
@@ -767,37 +1020,65 @@ def build_defect_fields(page, team_uuid, parent_task_uuid, summary, desc, handle
         sample = (r or {}).get("tasks", [{}])[0]
         fvs = [dict(f) for f in sample.get("field_values", [])]
         fv_map = {f["field_uuid"]: f for f in fvs}
-        # 模板缺陷可能缺少部分必填/共有字段（如 5nUKjALP 来源项目），从主工单补齐
+        # 模板缺陷可能缺少部分共有字段，从主工单补齐。
         for key in ("5nUKjALP", "W9qkyVXr", "Wq56Wyjw", "field012", "Jtnem8qs"):
             if key not in fv_map and key in parent_fv:
                 fv_map[key] = dict(parent_fv[key])
         fv_map = {k: v for k, v in fv_map.items() if k in DEFECT_FIELD_WHITELIST}
-        # 主工单共有字段值覆盖缺陷模板（保证与主工单一致）
+        # 主工单共有字段值覆盖历史模板，避免旧环境/旧客户数据污染。
         for key, fv in parent_fv.items():
             if key in fv_map:
                 fv_map[key]["value"] = fv.get("value")
     else:
         fv_map = {k: dict(v) for k, v in parent_fv.items() if k in DEFECT_FIELD_WHITELIST}
+
     if "field001" in fv_map:
         fv_map["field001"]["value"] = summary
-    # 描述字段：缺陷类型的描述为 field016（富文本 type 20），确保存在（兼容 field002 纯文本）
-    _desc_html = "".join("<p>" + p + "</p>" for p in desc.split(chr(10)) if p.strip()) or "<p></p>"
-    fv_map.setdefault("field016", {"field_uuid": "field016", "type": 20, "value": _desc_html, "value_type": 0, "date_value": ""})
-    fv_map["field016"]["value"] = _desc_html
+    else:
+        fv_map["field001"] = {"field_uuid": "field001", "type": 2, "value": summary, "value_type": 0, "date_value": ""}
+
+    # 描述字段：缺陷类型的描述为 field016（富文本），确保存在（兼容 field002 纯文本）。
+    desc_html = "".join("<p>" + p + "</p>" for p in desc.split(chr(10)) if p.strip()) or "<p></p>"
+    fv_map.setdefault("field016", {"field_uuid": "field016", "type": 20, "value": desc_html, "value_type": 0, "date_value": ""})
+    fv_map["field016"]["value"] = desc_html
     if "field002" in fv_map:
         fv_map["field002"]["value"] = desc
+
     if "95jUV2Mb" in fv_map:
         fv_map["95jUV2Mb"]["value"] = handler_uuid
     else:
         fv_map["95jUV2Mb"] = {"field_uuid": "95jUV2Mb", "type": 8, "value": handler_uuid, "value_type": 0, "date_value": ""}
-    # 负责人(field004) / 验证人(Sg5vqjRr) = 当前 ONES 登录账号，不再沿用父工单负责人
+
+    # 负责人 / 验证人固定为当前 ONES 登录账号，不沿用父工单或历史缺陷。
     current = get_current_user(page)
     fv_map["field004"] = {"field_uuid": "field004", "type": 8, "value": current.get("uuid") or "", "value_type": 0, "date_value": ""}
     fv_map["Sg5vqjRr"] = {"field_uuid": "Sg5vqjRr", "type": 8, "value": current.get("uuid") or "", "value_type": 0, "date_value": ""}
-    # 严重程度默认「一般」（黑盒报告的 S1~S4 仅自用，不据此定级）
     fv_map["field038"] = {"field_uuid": "field038", "type": 1, "value": SEVERITY.get(severity_text, SEVERITY[DEFAULT_SEVERITY]), "value_type": 0, "date_value": ""}
+
+    type_by_uuid = {f.get("uuid"): FIELD_TYPES.get(f.get("uuid"), 1) for f in (field_defs or []) if f.get("uuid")}
     for fuuid, val in (overrides or {}).items():
         if val is None:
             continue
-        fv_map[fuuid] = {"field_uuid": fuuid, "type": FIELD_TYPES.get(fuuid, 1), "value": val, "value_type": 0, "date_value": ""}
+        fv_map[fuuid] = {
+            "field_uuid": fuuid,
+            "type": type_by_uuid.get(fuuid, FIELD_TYPES.get(fuuid, 1)),
+            "value": val,
+            "value_type": 0,
+            "date_value": "",
+        }
+
+    if field_defs:
+        missing = []
+        for fd in field_defs:
+            fuuid = fd.get("uuid")
+            if not fd.get("required") or not fuuid or fuuid not in DEFECT_FIELD_WHITELIST:
+                continue
+            val = (fv_map.get(fuuid) or {}).get("value")
+            if val in (None, "", [], {}):
+                missing.append(f"{fd.get('name') or fuuid}({fuuid})")
+        if missing:
+            raise RuntimeError(
+                "缺少缺陷必填字段: " + ", ".join(missing)
+                + "；请在 profile overrides 中配置，不要依赖历史缺陷模板"
+            )
     return list(fv_map.values())
