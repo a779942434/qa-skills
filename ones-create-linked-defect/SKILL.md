@@ -130,6 +130,7 @@ description: >-
 
 - 含中文的脚本必须写成 `.py` 文件（UTF-8）再执行，避免内联 Python heredoc 被 shell 转码乱码。
 - 页面存在多个 CKEditor：主工单描述（editor1，禁止操作）与提缺陷弹窗描述（editor2，只操作 `[role=dialog]` 内含"选择关联关系"的那个）。
+- 缺陷详情补嵌图片时不要点描述中心：那里常命中已有图片并打开预览；应点首个非图片正文段落。若预览已打开，先 Escape 再重试。
 - 新建缺陷弹窗定位：页面有多个 `[role=dialog]`（工单抽屉也是），
   弹窗 fixed 定位 `offsetParent=null`；统一用
   「含`选择关联关系` + `getBoundingClientRect().width>0`」判定

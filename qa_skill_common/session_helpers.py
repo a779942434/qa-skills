@@ -22,9 +22,9 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 try:
-    from .bbt_helpers import _chrome_candidates
+    from .bbt_helpers import _chrome_candidates, configure_page_timeouts
 except ImportError:  # 兼容直接执行单文件
-    from bbt_helpers import _chrome_candidates
+    from bbt_helpers import _chrome_candidates, configure_page_timeouts
 
 
 def launch_session(headless: bool = True, cdp_port: int | None = None,
@@ -45,6 +45,7 @@ def launch_session(headless: bool = True, cdp_port: int | None = None,
         storage_state=storage_state,
     )
     page = ctx.new_page()
+    configure_page_timeouts(page)
     return pw, browser, ctx, page
 
 
@@ -60,6 +61,7 @@ def connect_session(cdp_url: str = "http://127.0.0.1:9222",
     page = find_reuse_page(ctx, url_contains=url_contains)
     if page is None:
         page = ctx.new_page()
+    configure_page_timeouts(page)
     return pw, browser, ctx, page
 
 

@@ -11,7 +11,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from qa_skill_common.phase_runner import (  # noqa: E402
-    BLOCK, FAIL, PASS, BusinessCaseFailure, CaseGroupSpec, CaseResult, CaseSpec,
+    BLOCK, BLOCKER_SCRIPT, FAIL, OBSERVATION, PASS, UNCOVERED,
+    BusinessCaseFailure, CaseGroupSpec, CaseResult, CaseSpec,
     InfrastructureAbort, PhaseRunner, PhaseSpec, RunState,
 )
 
@@ -119,6 +120,26 @@ class TestPhaseRunner(unittest.TestCase):
         self.assertEqual(recovered.get_data("x"), 1)
 
 
+
+class TestRunStateTaxonomy(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = RunState.load_or_create(Path(self.tmp.name) / "state", "taxonomy", "分类")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_uncovered_observation_and_blocker_type(self):
+        self.state.mark_case("c1", "p1", UNCOVERED, note="需求标黄")
+        self.state.mark_case("c2", "p1", OBSERVATION, note="字段未启用")
+        self.state.mark_case("c3", "p1", BLOCK, note="定位失败", blocker_type=BLOCKER_SCRIPT)
+        summary = self.state.summary()
+        self.assertEqual(summary["uncovered"], 1)
+        self.assertEqual(summary["observations"], 1)
+        self.assertEqual(summary["blocked"], 1)
+        self.assertEqual(summary["blocker_types"][BLOCKER_SCRIPT], 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 
@@ -180,6 +201,26 @@ class TestPreflightAndLedger(unittest.TestCase):
         PhaseRunner(None, self.state, validators={"record_no": lambda v: False}).run([phase])
         self.assertEqual(calls, [])
         self.assertEqual(self.state.phase_status("consume"), BLOCK)
+
+
+
+class TestRunStateTaxonomy(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = RunState.load_or_create(Path(self.tmp.name) / "state", "taxonomy", "分类")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_uncovered_observation_and_blocker_type(self):
+        self.state.mark_case("c1", "p1", UNCOVERED, note="需求标黄")
+        self.state.mark_case("c2", "p1", OBSERVATION, note="字段未启用")
+        self.state.mark_case("c3", "p1", BLOCK, note="定位失败", blocker_type=BLOCKER_SCRIPT)
+        summary = self.state.summary()
+        self.assertEqual(summary["uncovered"], 1)
+        self.assertEqual(summary["observations"], 1)
+        self.assertEqual(summary["blocked"], 1)
+        self.assertEqual(summary["blocker_types"][BLOCKER_SCRIPT], 1)
 
 
 if __name__ == "__main__":

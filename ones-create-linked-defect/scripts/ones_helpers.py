@@ -601,6 +601,42 @@ def _visible_description_editor(page):
     return best
 
 
+
+def _enter_description_edit(page, viewer, timeout=8.0):
+    """从查看态进入 CKEditor 编辑态，避开图片中心导致预览弹窗。"""
+    deadline = _time.time() + max(float(timeout), 1.0)
+    while _time.time() < deadline:
+        # 优先点击首个非图片文本段落，正文通常从“严重程度/环境”等文本开始。
+        try:
+            para = viewer.locator('p:not(:has(img))').filter(has_text=re.compile(r'\S')).first
+            if para.count():
+                para.click(timeout=2000)
+        except Exception:
+            pass
+        page.wait_for_timeout(250)
+        try:
+            if page.locator('a.cke_button__onesimage:visible').count():
+                return True
+        except Exception:
+            pass
+        # 若已打开图片预览，Escape 只关预览，不取消正文编辑。
+        try:
+            page.keyboard.press('Escape')
+        except Exception:
+            pass
+        page.wait_for_timeout(200)
+        try:
+            viewer.click(position={'x': 8, 'y': 8}, timeout=1500)
+        except Exception:
+            pass
+        page.wait_for_timeout(250)
+        try:
+            if page.locator('a.cke_button__onesimage:visible').count():
+                return True
+        except Exception:
+            pass
+    return False
+
 def append_task_description_images(page, team_uuid, task_uuid, image_paths,
                                    timeout=90.0, verify_loaded=True):
     """把截图以内嵌图片形式追加到 ONES 工作项富文本描述并保存。
@@ -659,8 +695,8 @@ def append_task_description_images(page, team_uuid, task_uuid, image_paths,
 
     viewer = page.locator('.richtext-input-viewer-wrapper:visible').first
     viewer.wait_for(state='visible', timeout=int(min(timeout, 20) * 1000))
-    viewer.click(timeout=5000)
-    page.wait_for_timeout(500)
+    if not _enter_description_edit(page, viewer, timeout=min(float(timeout), 8.0)):
+        raise RuntimeError('未进入描述 CKEditor 编辑态')
 
     inserted = []
     try:

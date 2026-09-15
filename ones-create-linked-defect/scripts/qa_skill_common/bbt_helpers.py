@@ -42,6 +42,8 @@ __all__ = [
     "configure_page_timeouts", "active_pane", "dialog_by_title", "safe_click",
     "wait_result_or_closed", "select_dropdown_option", "capture_failure_context",
     "assert_control_type", "select_cascader_values", "wait_dropdown_closed",
+    "visible_form_item", "select_single_option", "select_multi_options",
+    "set_date_value", "close_surface_stack",
 ]
 
 
@@ -447,6 +449,156 @@ def select_dropdown_option(page, trigger, option_text=None, query=None, pick_fir
         return {"ok": False, "reason": "select_failed", "selected": "", "options": [], "error": str(exc)[:200]}
 
 
+def visible_form_item(page, label, scope=None):
+    """定位当前真正可见的表单项，避免隐藏页签中的同名字段。
+
+    优先限定活动页签；若筛选区不在页签容器内，再回退到全页面可见项。
+    """
+    candidates = []
+    try:
+        loc = page.locator(f'.el-form-item:visible:has(.el-form-item__label:text-is("{label}"))')
+        if loc.count():
+            candidates.append(loc.last)
+    except Exception:
+        pass
+    try:
+        root = scope or active_pane(page)
+        loc = root.locator(f'.el-form-item:visible:has(.el-form-item__label:text-is("{label}"))')
+        if loc.count():
+            candidates.append(loc.last)
+    except Exception:
+        pass
+    for candidate in candidates:
+        try:
+            controls = candidate.locator(
+                'input:visible, textarea:visible, .el-select__wrapper:visible, '
+                '.el-cascader:visible, .el-date-editor:visible'
+            )
+            if controls.count():
+                return candidate
+        except Exception:
+            continue
+    return candidates[0] if candidates else None
+
+
+def select_single_option(page, trigger, option_text, query=None, timeout=5,
+                         allow_partial=True):
+    """选择 Element Plus 单选下拉并回读当前值；不在选后强制按 Escape。"""
+    ms = int(float(timeout) * 1000)
+    select = trigger
+    try:
+        inner = trigger.locator(".el-select")
+        if inner.count():
+            select = inner.first
+    except Exception:
+        pass
+    try:
+        select.wait_for(state="visible", timeout=ms)
+        select.click(force=True, timeout=ms)
+        if query:
+            search = page.locator(".el-select-dropdown:visible input").first
+            if search.count():
+                search.fill(str(query))
+                page.wait_for_timeout(250)
+        opts = page.locator(".el-select-dropdown:visible .el-select-dropdown__item:not(.is-disabled)")
+        texts = [(x or "").strip() for x in opts.all_inner_texts()]
+        target = None
+        for i in range(opts.count()):
+            text = (opts.nth(i).inner_text() or "").strip()
+            if text == option_text or (allow_partial and str(option_text) in text):
+                target = opts.nth(i)
+                break
+        if target is None:
+            return {"ok": False, "reason": "option_not_found", "selected": "", "options": texts[:30]}
+        target.click(timeout=ms)
+        page.wait_for_timeout(250)
+        selected = ""
+        try:
+            selected = (select.inner_text() or "").strip()
+        except Exception:
+            pass
+        ok = option_text in selected or selected == option_text
+        return {"ok": ok, "reason": "selected" if ok else "readback_mismatch",
+                "selected": selected, "expected": option_text, "options": texts[:30]}
+    except Exception as exc:
+        return {"ok": False, "reason": "select_failed", "selected": "",
+                "options": [], "error": str(exc)[:200]}
+
+
+def select_multi_options(page, trigger, values, query=None, timeout=5,
+                         allow_partial=True):
+    """逐项选择多选下拉、必要时重开浮层，并回读 tag 值。"""
+    values = [values] if isinstance(values, str) else list(values or [])
+    ms = int(float(timeout) * 1000)
+    select = trigger
+    try:
+        inner = trigger.locator(".el-select")
+        if inner.count():
+            select = inner.first
+    except Exception:
+        pass
+    chosen = []
+    try:
+        for value in values:
+            if page.locator(".el-select-dropdown:visible").count() == 0:
+                select.click(force=True, timeout=ms)
+                page.wait_for_timeout(180)
+            if query:
+                search = page.locator(".el-select-dropdown:visible input").first
+                if search.count():
+                    search.fill(str(query))
+                    page.wait_for_timeout(180)
+            opts = page.locator(".el-select-dropdown:visible .el-select-dropdown__item:not(.is-disabled)")
+            target = None
+            for i in range(opts.count()):
+                text = (opts.nth(i).inner_text() or "").strip()
+                if text == value or (allow_partial and str(value) in text):
+                    target = opts.nth(i)
+                    break
+            if target is None:
+                return {"ok": False, "reason": f"option_not_found:{value}",
+                        "selected": chosen, "expected": values}
+            target.click(timeout=ms)
+            page.wait_for_timeout(200)
+            chosen.append(value)
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        wait_dropdown_closed(page, timeout=min(float(timeout), 3))
+        tags = []
+        try:
+            tags = [x.strip() for x in select.locator(".el-tag").all_inner_texts() if x.strip()]
+        except Exception:
+            pass
+        joined = " ".join(tags)
+        missing = [v for v in values if v not in joined]
+        return {"ok": not missing, "reason": "selected" if not missing else f"missing:{missing}",
+                "selected": tags, "expected": values}
+    except Exception as exc:
+        return {"ok": False, "reason": "select_failed", "selected": chosen,
+                "expected": values, "error": str(exc)[:200]}
+
+
+def set_date_value(page, trigger, value, timeout=5):
+    """日期输入：点击、输入、Enter 提交、Tab 失焦并回读。"""
+    ms = int(float(timeout) * 1000)
+    try:
+        inp = trigger.locator("input").first
+        inp.wait_for(state="visible", timeout=ms)
+        inp.click(timeout=ms)
+        inp.fill(str(value))
+        inp.press("Enter")
+        inp.press("Tab")
+        page.wait_for_timeout(250)
+        actual = inp.input_value().strip()
+        return {"ok": actual == str(value), "reason": "selected" if actual == str(value) else "readback_mismatch",
+                "expected": str(value), "selected": actual}
+    except Exception as exc:
+        return {"ok": False, "reason": "date_failed", "expected": str(value),
+                "selected": "", "error": str(exc)[:200]}
+
+
 def capture_failure_context(page, out_dir, name, feature="", extra=None, max_dialog_len=1800):
     """一次性捕获失败现场：截图 + JSON（URL/反馈/弹窗/浮层/activity）。
 
@@ -563,24 +715,54 @@ def retry(fn, attempts=2, interval=1.0, desc=""):
     return False, last_exc
 
 
-def close_dialog(page, timeout=5):
-    """收尾关闭当前可见弹窗/下拉（Escape + 取消兜底），避免残留互相遮挡。"""
-    try:
-        page.keyboard.press("Escape")
-    except Exception:
-        pass
-    try:
-        cancel = page.locator(".el-dialog:visible button:has-text('取消'), .el-message-box:visible button:has-text('取消')")
-        if cancel.count() > 0:
-            cancel.first.click()
-    except Exception:
-        pass
-    page.wait_for_timeout(400)
-    return wait_until(
-        page,
-        lambda p: p.locator("[role=dialog]:visible, .el-dialog:visible, .el-message-box:visible").count() == 0,
-        timeout=timeout,
+def close_surface_stack(page, timeout=5):
+    """从最上层开始收尾：先关下拉/级联/日期，再关结果弹窗。
+
+    不依赖一次 Escape：每次循环先收浮层，再点可见取消或标题栏关闭，直到干净。
+    """
+    deadline = time.time() + max(float(timeout), 0)
+    floating = (
+        ".el-select-dropdown:visible, .el-cascader-dropdown:visible, "
+        ".el-cascader__dropdown:visible, .el-picker-panel:visible"
     )
+    dialogs = ".el-overlay-dialog:visible, .el-dialog:visible, .el-message-box:visible"
+    while True:
+        try:
+            if page.locator(floating).count() == 0 and page.locator(dialogs).count() == 0:
+                return {"closed": True, "reason": "clean"}
+        except Exception:
+            return {"closed": True, "reason": "detached"}
+        try:
+            if page.locator(floating).count() > 0:
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(120)
+        except Exception:
+            pass
+        try:
+            if page.locator(dialogs).count() > 0:
+                cancel = page.locator(".el-dialog:visible button:has-text('取消'), .el-message-box:visible button:has-text('取消')")
+                if cancel.count():
+                    cancel.last.click(timeout=1200)
+                else:
+                    header = page.locator(".el-dialog:visible .el-dialog__header .el-icon.cursor-pointer")
+                    if header.count():
+                        header.last.click(timeout=1200)
+                    else:
+                        page.keyboard.press("Escape")
+                page.wait_for_timeout(150)
+        except Exception:
+            pass
+        if time.time() >= deadline:
+            try:
+                left = page.locator(dialogs).count() + page.locator(floating).count()
+            except Exception:
+                left = 0
+            return {"closed": left == 0, "reason": "timeout" if left else "clean", "left": left}
+
+
+def close_dialog(page, timeout=5):
+    """兼容入口：清理当前浮层与弹窗，返回是否已关闭。"""
+    return bool(close_surface_stack(page, timeout=timeout).get("closed"))
 
 
 def wait_text(page, text, timeout=15, interval=0.5):
@@ -1474,7 +1656,7 @@ def assert_control_type(locator, expected, timeout=3):
     }
 
 
-def select_cascader_values(page, trigger, values, confirm=True, timeout=5, require_all=True):
+def select_cascader_values(page, trigger, values, confirm="auto", timeout=5, require_all=True):
     """选择级联叶节点；多选级联提交后回读 tag 值。
 
     values 可为单个字符串或字符串列表。级联多选通常必须先选节点，再点浮层“确定”。
@@ -1511,14 +1693,22 @@ def select_cascader_values(page, trigger, values, confirm=True, timeout=5, requi
     if confirm:
         popper = page.locator(".el-cascader-dropdown:visible, .el-cascader__dropdown:visible, .el-popper:visible").last
         button = popper.locator("button", has_text="确定").last
-        if button.count() == 0:
+        if button.count():
+            try:
+                button.click(timeout=ms)
+                page.wait_for_timeout(250)
+            except Exception as exc:
+                return {"ok": False, "selected": [], "expected": values,
+                        "reason": "confirm_failed", "error": str(exc)[:200]}
+        elif confirm is True:
             return {"ok": False, "selected": [], "expected": values, "reason": "confirm_not_found"}
-        try:
-            button.click(timeout=ms)
-            page.wait_for_timeout(250)
-        except Exception as exc:
-            return {"ok": False, "selected": [], "expected": values,
-                    "reason": "confirm_failed", "error": str(exc)[:200]}
+        else:
+            # 单层级联通常没有确认按钮，点击触发区外收尾，不能强行 Enter 清空选择。
+            try:
+                page.mouse.click(2, 2)
+                page.wait_for_timeout(150)
+            except Exception:
+                pass
     wait_dropdown_closed(page, timeout=min(float(timeout), 3))
     try:
         selected = [t.strip() for t in root.locator(".el-tag").all_inner_texts() if t.strip()]

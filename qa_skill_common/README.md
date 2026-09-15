@@ -16,6 +16,9 @@
 | `preflight.py` | 通用预检（URL、活动页签、控件类型、按钮状态） |
 | `session_helpers.py` | 普通会话与持久 MES 会话（CDP 9222）管理 |
 | `recon_generic/` | 页面、弹窗、下拉与主子表的四个参数化侦察命令 |
+| `import_helpers.py` | 导入边界框架：混合文件、部分成功、失败文件下载与解析 |
+| `field_contracts.py` | 页面字段到接口参数的契约注册表 |
+| `data_factory.py` | 测试批次、唯一编号与数据配方前置校验 |
 
 ## 环境配置（站点/账号不再写死）
 

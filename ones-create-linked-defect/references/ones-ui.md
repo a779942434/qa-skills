@@ -123,6 +123,8 @@
 ## 描述编辑器（CKEditor）
 
 - 清空模板：点击编辑器 → Ctrl+A → Backspace → 输入内容。
+- 进入编辑态不要点描述区域中心（容易命中已有图片并打开预览）；优先点击首个非图片正文段落。
+- 若误开图片预览，先按 Escape 关闭预览，再点正文段落进入编辑态；`append_task_description_images()` 已内置该降级。
 - 内嵌截图（稳定版）：使用 `append_task_description_images()`。它执行：
   点击描述区域进入编辑态 → 点击 `a.cke_button__onesimage` → 在文件选择器中设置图片 →
   轮询编辑器中的 `.ones-image-figure img` 直到 `src` 为 https 且图片已加载 → 点击“保存”等待 `tasks/update3` →

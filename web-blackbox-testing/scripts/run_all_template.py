@@ -274,7 +274,7 @@ def main():
                     "id": item["id"],
                     "标题": item.get("备注") or "待补充",
                     "级别": "待确认",
-                    "备注": "",
+                    "备注": item.get("阻塞类型", ""),
                 })
         if errs:
             problems.append({"id": "ERR", "标题": "错误监听命中", "级别": "待确认", "备注": str(errs)[:500]})

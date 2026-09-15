@@ -30,13 +30,13 @@
 
 本次实测出现大量 `Locator.click/inner_text Timeout 30000ms`，根因不是页面慢，而是脚本命中了隐藏页签、旧弹窗、teleport 浮层或已关闭的 dialog。后续脚本必须遵守：
 
-1. **页签作用域**：多页签页面先用 `active_pane(page)`，所有字段、表格、按钮操作都限定在该 Locator 内；禁止全局 `.el-form-item.first`。隐藏 tab 中同名字段常见 `width=0`，点击会等满默认超时。
+1. **分层超时和页签作用域**：脚本连接页面后自动执行 5 秒动作、15 秒导航；导入/下载单独给 45 秒。多页签用 `active_pane(page)` 和 `visible_form_item()`，禁止全局 `.first` 命中隐藏 tab。
 2. **弹窗作用域**：新增/编辑/导入弹窗用 `dialog_by_title(page, "<标题>")`；不要混用 `.el-dialog:visible`、`.el-overlay-dialog` 和全局按钮。Element Plus 的 select/cascader/date popper 会 teleport，下拉选项只在对应 popper 内查找。
 3. **结果状态等待**：保存/导入等操作不要假设弹窗一定关闭。用 `wait_result_or_closed(page, dialog, ["导入完成","失败","已存在"])`，同时处理“结果文本出现”和“弹窗关闭”两种分支。操作后禁止继续读取已 detach 的旧 dialog locator。
-4. **接口返回作为业务完成信号**：打开页面或触发操作前先挂 `ApiWatcher` / `wait_for_response_after_action`，以 DevTools Network 同样的方式读取接口 URL、方法、状态码和耗时；接口返回即继续，不能用固定 5 秒猜业务完成。固定超时只用于“元素可点击性/异常上限”，不代表成功。
+4. **响应参数匹配作为完成信号**：用 `ApiWatcher.wait_action()` / `wait_for_response_after_action()`，按 URL + method + request JSON/body 匹配目标响应，避免抓到 reset 或上一次查询；接口返回即继续。`timeout` 仅作异常上限。
 5. **选择组件严格校验**：下拉用 `select_dropdown_option`，搜索不到目标时不要自动选首项；级联多选用 `select_cascader_values` 选叶并点浮层“确定”，随后断言 tag/value 已回填；控件形态用 `assert_control_type` 单独断言。
 6. **失败快停与现场捕获**：定位/状态失败时调用一次 `capture_failure_context(page, out_dir, name, feature=...)`，记录 URL、activity、toast、内联错误、可见 dialog/popper 数量和截图，然后记「阻塞/环境观察」，不要反复重试同一错误 locator。
-7. **严格定位优先**：能用标题、label、role 精确定位时不要用 `.first` 掩盖多匹配；多匹配应视为脚本问题，先限定作用域。
+7. **严格定位与层级收尾**：能用标题、label、role 精确定位时不要用 `.first` 掩盖多匹配；关闭现场统一用 `close_surface_stack(page)`，先关下拉/级联/日期，再关结果弹窗。
 
 推荐动作链：
 

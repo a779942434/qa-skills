@@ -28,14 +28,19 @@ def gen_report(meta: dict, cases: list, problems: list, uncovered: list,
         f"- 范围：{meta.get('范围', '')}",
         f"- 结果：通过 {sum(1 for c in cases if c.get('结果')=='通过')}，"
         f"失败 {sum(1 for c in cases if c.get('结果')=='失败')}，"
-        f"阻塞 {sum(1 for c in cases if c.get('结果')=='阻塞')}",
+        f"阻塞 {sum(1 for c in cases if c.get('结果')=='阻塞')}，"
+        f"未覆盖 {sum(1 for c in cases if c.get('结果')=='未覆盖')}，"
+        f"环境观察 {sum(1 for c in cases if c.get('结果')=='环境观察')}",
         "",
         "## 用例执行结果",
-        "| 用例ID | 模块 | 结果 | 证据 |",
-        "| --- | --- | --- | --- |",
+        "| 用例ID | 模块 | 结果 | 阻塞类型 | 证据 |",
+        "| --- | --- | --- | --- | --- |",
     ]
     for c in cases:
-        lines.append(f"| {c.get('id','')} | {c.get('模块','')} | {c.get('结果','')} | {c.get('证据','')} |")
+        lines.append(
+            f"| {c.get('id','')} | {c.get('模块','')} | {c.get('结果','')} | "
+            f"{c.get('阻塞类型','')} | {c.get('证据','')} |"
+        )
     lines += [
         "",
         "## 问题清单",

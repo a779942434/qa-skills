@@ -30,12 +30,20 @@ except Exception:  # pragma: no cover
 PASS = "通过"
 FAIL = "失败"
 BLOCK = "阻塞"
-VALID_STATUSES = {PASS, FAIL, BLOCK}
+UNCOVERED = "未覆盖"
+OBSERVATION = "环境观察"
+VALID_STATUSES = {PASS, FAIL, BLOCK, UNCOVERED, OBSERVATION}
+
+BLOCKER_PRODUCT = "产品缺陷"
+BLOCKER_TEST_DATA = "测试数据"
+BLOCKER_SCRIPT = "脚本问题"
 
 _STATUS_ALIASES = {
     "pass": PASS, "passed": PASS, "success": PASS, "ok": PASS, PASS: PASS,
     "fail": FAIL, "failed": FAIL, "failure": FAIL, FAIL: FAIL,
     "block": BLOCK, "blocked": BLOCK, "skip": BLOCK, "skipped": BLOCK, BLOCK: BLOCK,
+    "uncovered": UNCOVERED, "not_covered": UNCOVERED, UNCOVERED: UNCOVERED,
+    "observation": OBSERVATION, "env": OBSERVATION, OBSERVATION: OBSERVATION,
 }
 
 
@@ -57,14 +65,17 @@ def normalize_status(value: Any) -> str:
 
 
 def classify_exception(exc: BaseException) -> str:
-    """返回 infrastructure 或 business。
-
-    基础异常代表脚本/环境无法可靠继续；业务异常代表被测行为不符预期。
-    未知异常默认按 business 处理，避免把业务问题误判为环境异常。
-    """
+    """返回 infrastructure 或 business。"""
     if isinstance(exc, (InfrastructureAbort, PlaywrightTimeoutError, ConnectionError, TimeoutError)):
         return "infrastructure"
     return "business"
+
+
+def classify_blocker(exc: BaseException) -> str:
+    """把失败映射为产品缺陷、测试数据或脚本问题。"""
+    if classify_exception(exc) == "infrastructure":
+        return BLOCKER_SCRIPT
+    return BLOCKER_PRODUCT
 
 
 @dataclass
@@ -74,6 +85,7 @@ class CaseResult:
     evidence: str = ""
     actual: str = ""
     data: dict = field(default_factory=dict)
+    blocker_type: str = ""
 
     def __post_init__(self):
         self.status = normalize_status(self.status)
@@ -142,6 +154,7 @@ def normalize_case_result(raw: Any) -> CaseResult:
             evidence=raw.get("evidence") or raw.get("证据") or "",
             actual=raw.get("actual") or raw.get("实际结果") or "",
             data=raw.get("data") or {},
+            blocker_type=raw.get("blocker_type") or raw.get("阻塞类型") or "",
         )
     if isinstance(raw, (tuple, list)):
         values = list(raw) + [None, None, None]
@@ -292,7 +305,8 @@ class RunState:
         return rec.get("status")
 
     def mark_case(self, case_id: str, phase_id: str, status: str, note: str = "",
-                  evidence: str = "", actual: str = "", data: dict | None = None) -> None:
+                  evidence: str = "", actual: str = "", data: dict | None = None,
+                  blocker_type: str = "") -> None:
         status = normalize_status(status)
         previous = self.cases.get(case_id) or {}
         attempts = int(previous.get("attempts", 0)) + 1
@@ -303,6 +317,7 @@ class RunState:
             "note": note or "",
             "evidence": evidence or "",
             "actual": actual or note or "",
+            "blocker_type": blocker_type or "",
             "attempts": attempts,
             "updated_at": _now(),
         }
@@ -341,6 +356,7 @@ class RunState:
                 "id": cid,
                 "模块": rec.get("phase_id", ""),
                 "结果": rec.get("status", BLOCK),
+                "阻塞类型": rec.get("blocker_type", ""),
                 "证据": rec.get("evidence", ""),
                 "备注": rec.get("note", ""),
             }
@@ -348,7 +364,7 @@ class RunState:
         ]
 
     def summary(self) -> dict:
-        counts = {PASS: 0, FAIL: 0, BLOCK: 0}
+        counts = {PASS: 0, FAIL: 0, BLOCK: 0, UNCOVERED: 0, OBSERVATION: 0}
         for rec in self.cases.values():
             status = rec.get("status", BLOCK)
             if status not in counts:
@@ -361,6 +377,12 @@ class RunState:
             "passed": counts[PASS],
             "failed": counts[FAIL],
             "blocked": counts[BLOCK],
+            "uncovered": counts[UNCOVERED],
+            "observations": counts[OBSERVATION],
+            "blocker_types": {
+                key: sum(1 for rec in self.cases.values() if rec.get("blocker_type") == key)
+                for key in (BLOCKER_PRODUCT, BLOCKER_TEST_DATA, BLOCKER_SCRIPT)
+            },
             "phases": self.phases,
         }
 
@@ -474,10 +496,17 @@ class PhaseRunner:
             phase_cases = list(phase.cases)
             for group in phase.groups:
                 phase_cases.extend(group.cases)
-            phase_failed = any(
-                self.state.cases.get(c.id, {}).get("status") == FAIL for c in phase_cases
-            )
-            status = FAIL if phase_failed else PASS
+            statuses = [self.state.cases.get(c.id, {}).get("status") for c in phase_cases]
+            if BLOCK in statuses:
+                status = BLOCK
+            elif FAIL in statuses:
+                status = FAIL
+            elif UNCOVERED in statuses:
+                status = UNCOVERED
+            elif OBSERVATION in statuses:
+                status = OBSERVATION
+            else:
+                status = PASS
             self.state.mark_phase(phase.id, status)
             self.log(f"[phase:{phase.id}] {status}")
         self.state.save()
@@ -500,7 +529,7 @@ class PhaseRunner:
         missing = [d for d in case.depends_on if self.state.case_status(d) != PASS]
         if missing:
             note = f"依赖用例未通过: {', '.join(missing)}"
-            self.state.mark_case(case.id, phase.id, BLOCK, note=note)
+            self.state.mark_case(case.id, phase.id, BLOCK, note=note, blocker_type=BLOCKER_TEST_DATA)
             self.log(f"[{case.id}] {BLOCK} {note}")
             return False
         try:
@@ -508,6 +537,7 @@ class PhaseRunner:
             self.state.mark_case(
                 case.id, phase.id, result.status, note=result.note,
                 evidence=result.evidence, actual=result.actual, data=result.data,
+                blocker_type=result.blocker_type,
             )
             self.log(f"[{case.id}] {result.status} {result.note}")
             return False
@@ -516,7 +546,8 @@ class PhaseRunner:
                 self._handle_infrastructure(phase.id, case.id, exc, phase)
                 return True
             note = f"{type(exc).__name__}: {exc}"
-            self.state.mark_case(case.id, phase.id, FAIL, note=note, actual=note)
+            self.state.mark_case(case.id, phase.id, FAIL, note=note, actual=note,
+                                 blocker_type=classify_blocker(exc))
             self.log(f"[{case.id}] {FAIL} {note}")
             return False
 
@@ -581,6 +612,10 @@ class PhaseRunner:
                 status = BLOCK
             elif FAIL in statuses:
                 status = FAIL
+            elif UNCOVERED in statuses:
+                status = UNCOVERED
+            elif OBSERVATION in statuses:
+                status = OBSERVATION
             else:
                 status = PASS
             self.state.mark_group(group.id, phase.id, status)
@@ -615,13 +650,16 @@ class PhaseRunner:
             note=note + (f"; 现场={diag.get('json', '')}" if diag.get("json") else ""),
             evidence=diag.get("screenshot", ""),
             actual=note,
+            blocker_type=BLOCKER_SCRIPT,
         )
         self.state.mark_phase(phase_id, BLOCK, note=note)
         self.log(f"[{case_id}] {BLOCK} {note}")
 
 
 __all__ = [
-    "PASS", "FAIL", "BLOCK", "InfrastructureAbort", "BusinessCaseFailure",
+    "PASS", "FAIL", "BLOCK", "UNCOVERED", "OBSERVATION",
+    "BLOCKER_PRODUCT", "BLOCKER_TEST_DATA", "BLOCKER_SCRIPT",
+    "InfrastructureAbort", "BusinessCaseFailure",
     "CaseResult", "CaseSpec", "CaseGroupSpec", "PhaseSpec", "RunContext", "RunState", "PhaseRunner",
-    "normalize_status", "normalize_case_result", "classify_exception",
+    "normalize_status", "normalize_case_result", "classify_exception", "classify_blocker",
 ]

@@ -12,8 +12,10 @@ from qa_skill_common import api_wait as A  # noqa: E402
 
 
 class FakeRequest:
-    method = "POST"
-    resource_type = "xhr"
+    def __init__(self, method="POST", post_data=""):
+        self.method = method
+        self.resource_type = "xhr"
+        self.post_data = post_data
 
 
 class FakeResponse:
@@ -91,8 +93,52 @@ class TestApiWatcher(unittest.TestCase):
         self.assertFalse(new[0]["ok"])
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+
+class TestRequestMatching(unittest.TestCase):
+    def test_method_and_json_body_are_enforced(self):
+        request = FakeRequest("POST", '{"queryType":1,"statusList":[0],"page":1}')
+        response = FakeResponse("http://x/api/list?t=1", 200, request)
+
+        class Page:
+            def expect_response(self, matcher, timeout=None):
+                class Ctx:
+                    value = response
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, *args):
+                        return False
+                self.matcher = matcher
+                return Ctx()
+
+        result = A.wait_for_response_after_action(
+            Page(), lambda: None, url_contains="/api/list", method="POST",
+            request_json={"queryType": 1, "statusList": [0]}, timeout=5,
+        )
+        self.assertTrue(result["ok"])
+
+    def test_wrong_method_does_not_match(self):
+        request = FakeRequest("GET", '{"queryType":1}')
+        response = FakeResponse("http://x/api/list", 200, request)
+
+        class Page:
+            def expect_response(self, matcher, timeout=None):
+                class Ctx:
+                    value = response
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, *args):
+                        return False
+                self.matcher = matcher
+                return Ctx()
+
+        page = Page()
+        self.assertFalse(A._request_matches(response.request, method="POST"))
+        result = A.wait_for_response_after_action(
+            page, lambda: None, url_contains="/api/list", method="POST", timeout=5,
+        )
+        self.assertFalse(page.matcher(response))
+        self.assertTrue(result["ok"])  # FakePage 不执行 Playwright 的真实等待过滤
+
 
 
 class TestActionBoundResponse(unittest.TestCase):
@@ -127,3 +173,7 @@ class TestWatcherAction(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["status"], 200)
         self.assertEqual(records[0]["url"], "http://x/api/query")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

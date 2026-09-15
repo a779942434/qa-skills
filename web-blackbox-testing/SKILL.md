@@ -96,8 +96,12 @@ description: >-
 ## 执行形态与等待基线
 
 **一个任务 = 一个持久会话 + 一次登录 + 分阶段执行 + 检查点恢复**；
-**等待优先级：接口/响应基线等待 > 条件等待 > 固定 sleep（仅 ≤500ms 渲染余量/首次侦察兜底）**。
-总入口 `scripts/run_all_template.py` 默认写入 `run_state.json` / `data_ledger.json`；`--resume` 跳过已通过用例，`--phase <id>` 只跑指定阶段及依赖。基础定位/弹窗异常快停当前阶段并保存现场，业务失败记录后继续。
+**等待优先级：接口/响应参数匹配 > 条件等待 > 固定 sleep（仅 ≤500ms 渲染余量/首次侦察兜底）**。
+- 所有脚本强制分层超时：普通动作 5 秒、导航 15 秒、异步查询 15 秒、导入/下载 45 秒；禁止回落 Playwright 默认 30 秒。
+- 业务完成统一用 `ApiWatcher.wait_action()` / `wait_for_response_after_action()`，按 URL + method + 请求 JSON/body 精确匹配，避免抓到 reset 或旧查询响应。
+- 表单字段用 `visible_form_item()` 限定当前可见页签/弹窗；关闭现场用 `close_surface_stack()`，先关下拉/级联/日期，再关结果弹窗。
+- 基础定位/弹窗异常 5 秒内快停并只采集一次现场；业务失败记录后继续。
+总入口 `scripts/run_all_template.py` 默认写入 `run_state.json` / `data_ledger.json`；`--resume` 跳过已通过用例，`--phase <id>` 只跑指定阶段及依赖。
 细节见 [references/playwright-strategy.md](references/playwright-strategy.md)。
 
 ## 快速分层

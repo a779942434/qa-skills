@@ -34,8 +34,8 @@
   - 指纹存 `<workspace>/fingerprints/<名字>.json`（本机、不入 git、web 与 ones 两技能共享）。
 - `scripts/api_wait.py`：DevTools Network 风格的接口观测等待（核心等待方式，替代固定 sleep）。
   - `ApiWatcher(page)`：挂 request/response 监听（覆盖所有 frame），记录方法、URL、状态码、耗时和请求序号；同一 URL 的重复调用也可识别；
-  - `wait_for_response_after_action(page, action, url_contains=..., timeout=60)`：操作前绑定响应等待，接口返回立即继续，timeout 只作异常上限；
-  - `wait_action(action, keyword=None, timeout=60)`：推荐入口；动作与接口响应绑定，接口返回即继续，timeout 仅异常上限；
+  - `wait_for_response_after_action(page, action, url_contains=..., method=..., request_json=..., timeout=60)`：按 URL + method + 请求 JSON/body 精确匹配；接口返回立即继续，timeout 只作异常上限；
+  - `wait_action(action, keyword=None, method=..., request_json=..., timeout=60)`：推荐入口；动作与接口响应绑定，接口返回即继续，timeout 仅异常上限；
   - `snapshot()` + `wait_new(...)`：仅保留给“响应已经发生、只读观察”的兼容场景；
   - `confirm_action(page, action, keyword=None)`：默认使用动作绑定接口等待，再收集 HTTP≥400、toast、内联错误；
   - 业务不同无需预知接口路径，靠基线对比动态识别；无新响应 = 操作未生效。
@@ -44,6 +44,9 @@
 - `scripts/run_all_template.py`：**分阶段可恢复总入口**——一个任务一个持久会话、一次登录；支持 `--resume`、`--phase <id>`、`--connect`。
   - 每用例写 `run_state.json`，测试数据写 `data_ledger.json`；基础异常快停、业务失败继续。
   - 底层运行器见根公共包 `qa_skill_common/phase_runner.py`；`CaseGroupSpec` 用于弹窗 micro-case 批处理，同一弹窗只开关一次，每个 micro-case 独立检查点；旧 `CASES` 写法仍可用。
+- `scripts/qa_skill_common/import_helpers.py`：导入边界框架（混合文件、terminal 响应等待、失败文件下载/解析、部分成功校验）。
+- `scripts/qa_skill_common/field_contracts.py`：字段契约注册表（页面标签、控件类型、接口字段、值格式、别名）。
+- `scripts/qa_skill_common/data_factory.py`：测试批次 ID、唯一编号与数据配方前置校验。
 - `scripts/report_gen.py`：报告/缺陷清单骨架生成（`gen_report` / `gen_bug`），执行脚本直接喂结果生成 markdown，AI 只补分析。
 - `scripts/data_cleanup.py`：数据基线对比与清理留痕（`compare_state` / `write_cleanup_note`）。**按需使用**：测试环境保留造数为主，仅在确需清理时对比基线并记录已保留/已恢复（遵循必守 C（结束闸门））。
 - `scripts/ipc_helpers.py`：IPC 单机/产线界面导航辅助。

@@ -96,6 +96,21 @@ class ApiWatcher:
         except Exception:
             pass
 
+    def close(self):
+        """移除页面监听，避免长流程反复挂 watcher 造成监听器堆积。"""
+        for event, handler in (("request", self._on_request), ("response", self._on_response)):
+            try:
+                self.page.remove_listener(event, handler)
+            except Exception:
+                pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
     def snapshot(self):
         """操作前调用：返回响应序号和 URL 基线。
 
@@ -159,7 +174,8 @@ class ApiWatcher:
             self._event.wait(min(remaining, max(float(interval), 0.05)))
             self._event.clear()
 
-    def wait_action(self, action, keyword=None, url_contains=None, predicate=None,
+    def wait_action(self, action, keyword=None, url_contains=None, method=None, predicate=None,
+                    request_predicate=None, request_json=None, body_contains=None,
                     timeout=60.0, accept_status=None, resource_types=("xhr", "fetch")):
         """执行 action 并等待匹配接口返回，返回 Network 风格响应记录列表。
 
@@ -169,7 +185,11 @@ class ApiWatcher:
         result = wait_for_response_after_action(
             self.page, action,
             url_contains=url_contains or keyword,
+            method=method,
             predicate=predicate,
+            request_predicate=request_predicate,
+            request_json=request_json,
+            body_contains=body_contains,
             timeout=timeout,
             accept_status=accept_status,
             resource_types=resource_types,
@@ -206,7 +226,60 @@ def _is_static_url(url: str) -> bool:
     return path.endswith(_STATIC_SUFFIXES)
 
 
-def wait_for_response_after_action(page, action, url_contains=None, predicate=None,
+
+def _normalize_methods(method):
+    if method is None:
+        return set()
+    values = [method] if isinstance(method, str) else list(method)
+    return {str(x).strip().upper() for x in values if str(x).strip()}
+
+
+def _json_contains(actual, expected):
+    """递归判断 actual 是否包含 expected 的键值；列表按“存在任一匹配项”处理。"""
+    if isinstance(expected, dict):
+        if not isinstance(actual, dict):
+            return False
+        return all(k in actual and _json_contains(actual[k], v) for k, v in expected.items())
+    if isinstance(expected, list):
+        if not isinstance(actual, list):
+            return False
+        return all(any(_json_contains(item, exp) for item in actual) for exp in expected)
+    return actual == expected
+
+
+def _request_matches(request, method=None, request_predicate=None,
+                     request_json=None, body_contains=None):
+    methods = _normalize_methods(method)
+    req_method = str(getattr(request, "method", "") or "").upper()
+    if methods and req_method not in methods:
+        return False
+    if request_predicate is not None:
+        try:
+            if not request_predicate(request):
+                return False
+        except Exception:
+            return False
+    body = ""
+    try:
+        body = getattr(request, "post_data", "") or ""
+    except Exception:
+        body = ""
+    if body_contains is not None:
+        needles = [body_contains] if isinstance(body_contains, str) else list(body_contains)
+        if not all(str(x) in body for x in needles):
+            return False
+    if request_json is not None:
+        try:
+            actual = json.loads(body) if body else None
+        except Exception:
+            return False
+        if not _json_contains(actual, request_json):
+            return False
+    return True
+
+
+def wait_for_response_after_action(page, action, url_contains=None, method=None, predicate=None,
+                                   request_predicate=None, request_json=None, body_contains=None,
                                    timeout=60.0, accept_status=None,
                                    exclude_static=True, raise_on_timeout=False,
                                    resource_types=("xhr", "fetch")):
@@ -235,6 +308,11 @@ def wait_for_response_after_action(page, action, url_contains=None, predicate=No
         if contains and not any(x in url for x in contains):
             return False
         if accept_status is not None and status not in accept_status:
+            return False
+        if not _request_matches(response.request, method=method,
+                                request_predicate=request_predicate,
+                                request_json=request_json,
+                                body_contains=body_contains):
             return False
         if predicate is not None and not predicate(response):
             return False
@@ -267,14 +345,16 @@ def wait_for_response_after_action(page, action, url_contains=None, predicate=No
 
 
 def wait_any_api(page, action=None, keyword=None, timeout=60.0, interval=0.3,
-                 url_contains=None, predicate=None, accept_status=None,
+                 url_contains=None, method=None, predicate=None,
+                 request_predicate=None, request_json=None, body_contains=None, accept_status=None,
                  resource_types=("xhr", "fetch")):
     """等待 action 触发的新业务接口返回。action 为必填。"""
     if action is None:
         raise ValueError("wait_any_api 必须传入 action；只读观察请直接使用 ApiWatcher.wait_new")
     w = ApiWatcher(page)
     return w.wait_action(
-        action, keyword=keyword, url_contains=url_contains, predicate=predicate,
+        action, keyword=keyword, url_contains=url_contains, method=method, predicate=predicate,
+        request_predicate=request_predicate, request_json=request_json, body_contains=body_contains,
         timeout=timeout, accept_status=accept_status, resource_types=resource_types,
     )
 
@@ -284,7 +364,8 @@ if __name__ == "__main__":
 
 
 def confirm_action(page, action, watcher=None, keyword=None, timeout=60.0,
-                   response_required=True,
+                   response_required=True, method=None, request_predicate=None,
+                   request_json=None, body_contains=None,
                    toast_selector=".el-message, .el-notification, .el-message-box",
                    form_error_selector=".el-form-item__error"):
     """执行 action 并等待业务接口返回，再综合判定结果。
@@ -294,7 +375,11 @@ def confirm_action(page, action, watcher=None, keyword=None, timeout=60.0,
     """
     w = watcher or ApiWatcher(page)
     if response_required:
-        responses = w.wait_action(action, keyword=keyword, timeout=timeout)
+        responses = w.wait_action(
+            action, keyword=keyword, method=method, timeout=timeout,
+            request_predicate=request_predicate, request_json=request_json,
+            body_contains=body_contains,
+        )
     else:
         action()
         responses = []
