@@ -176,6 +176,15 @@ class TestPersistentSession(unittest.TestCase):
         self.assertEqual(got, (restarted, *sessions[1]))
         self.assertEqual(connect.call_count, 2)
 
+    def test_ensure_mes_session_rejects_ones_port_and_user_profile(self):
+        with self.assertRaises(RuntimeError):
+            S.ensure_mes_session(cdp_port=9334, login=False)
+        with self.assertRaises(RuntimeError):
+            S.ensure_mes_session(
+                session_dir=Path.home() / "Library" / "Application Support" / "Google" / "Chrome",
+                login=False,
+            )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

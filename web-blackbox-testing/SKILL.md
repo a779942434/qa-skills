@@ -48,10 +48,11 @@ description: >-
 
 1. **只做标准用户操作**（点击 / 键入 / 下拉）。**禁止** JS 注入改值、改 DOM/属性绕过校验、对 disabled 输入框强填、改遮挡元素层级；标准操作不可行时记为「待确认/缺陷/环境观察」，**不许硬绕**。
 2. **禁止下载浏览器**：只用本机系统 Chrome/Edge/Chromium（`MES_BROWSER_PATH` 可指定）；**不执行** `playwright install`。
-3. **不脑补**：需求/接口/字段没有的一律不编造；必填字段来源不明就标「待确认/需造数」。
-4. **不泄露凭据**：账号、密码、Token、Cookie、个人敏感信息不写入报告、截图文件名或知识库。
-5. **不碰历史数据**：只操作本轮创建或用户明确授权的数据；未确认环境性质时按生产环境保守处理。
-6. **判定缺陷前必须多信号**：凡结论是「无提示 / 无法操作 / 未生效」，必须确认四源（新接口 + toast + 内联错误 + 数据变化）全为负（`judge_action` 的 `reason="silent"`）；只看单层信号（仅内联错误 / 仅 toast / 仅无响应）不得下结论。
+3. **默认后台隔离运行**：MES 自动化必须使用无头模式和新浏览器上下文，不得连接用户日常 Chrome/Edge profile、现有标签页或 ONES CDP `9334`。只有用户明确要求“可见窗口/人工接管”时，才允许前台模式。
+4. **不脑补**：需求/接口/字段没有的一律不编造；必填字段来源不明就标「待确认/需造数」。
+5. **不泄露凭据**：账号、密码、Token、Cookie、个人敏感信息不写入报告、截图文件名或知识库。
+6. **不碰历史数据**：只操作本轮创建或用户明确授权的数据；未确认环境性质时按生产环境保守处理。
+7. **判定缺陷前必须多信号**：凡结论是「无提示 / 无法操作 / 未生效」，必须确认四源（新接口 + toast + 内联错误 + 数据变化）全为负（`judge_action` 的 `reason="silent"`）；只看单层信号（仅内联错误 / 仅 toast / 仅无响应）不得下结论。
 
 ### B. 默认做法（可自行决定，不必逐一确认）
 
@@ -174,7 +175,7 @@ description: >-
 
 **Element Plus 表单/下拉/表格交互配方**（7 个高频坑 + 直接可用的 helper：`form_item` / `open_select` / `select_option` / `select_value` / `select_is_multiple` / `table_col` / `open_dropdown_menu` / `goto_feature`）见 [scripts/qa_skill_common/references/element-plus-recipe.md](scripts/qa_skill_common/references/element-plus-recipe.md)（**做 UI 用例前先看**）。
 
-详见 [references/playwright-strategy.md](references/playwright-strategy.md)（多信号判定、接口观测等待、失败分级、脚本与执行约定）；级联/树选择、Playwright MCP 真窗口、新站点适配定式见 [references/advanced-ui.md](references/advanced-ui.md)（按需）。三条最常用：
+详见 [references/playwright-strategy.md](references/playwright-strategy.md)（多信号判定、接口观测等待、失败分级、脚本与执行约定）；级联/树选择、Playwright MCP 无头隔离、新站点适配定式见 [references/advanced-ui.md](references/advanced-ui.md)（按需）。三条最常用：
 
 - 复用已有页面，不重复多开。
 - **接口观测等待（必做）**：操作后先等业务接口返回再断言（`scripts/api_wait.py`），不直接读 DOM 下结论。

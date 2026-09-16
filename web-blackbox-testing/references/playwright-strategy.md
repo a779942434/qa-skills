@@ -69,8 +69,9 @@ result = wait_result_or_closed(page, dlg, ["成功", "失败", "已存在"])
 
 ## 脚本与执行约定
 
-1. 浏览器自动化统一用本机 Python Playwright 脚本（UTF-8，写成 `.py` 文件执行）
-   或浏览器控制技能；先完成登录、菜单定位和页面结构侦察（`recon_page.py`），
+1. 浏览器自动化默认且优先用本机 Python Playwright 无头脚本（UTF-8，写成 `.py` 文件执行）；
+   使用 Playwright MCP 时必须启用 `--headless --isolated`，禁止连接日常 profile、现有标签页和 ONES `9334`。
+   先完成登录、菜单定位和页面结构侦察（`recon-generic/recon_page.py`），
    再对稳定流程固化脚本。
    **同一被测页面不重复多开**：连接常驻浏览器时先 `find_page(ctx, url_contains=...)`
    检查目标页面是否已存在，存在就复用同一个页面继续测试；

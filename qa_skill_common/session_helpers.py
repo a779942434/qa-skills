@@ -526,9 +526,21 @@ def ensure_mes_session(base_url: str | None = None, target_url: str | None = Non
     - login=True 时调用 ensure_login，已登录会直接跳过。
     """
     port = int(cdp_port or DEFAULT_MES_CDP_PORT)
+    if port == 9334:
+        raise RuntimeError("MES 持久会话禁止使用 ONES CDP 端口 9334；请使用独立的 9222")
+    sess_dir = Path(session_dir).expanduser() if session_dir else default_persistent_session_dir()
+    user_profile_markers = (
+        "Library/Application Support/Google/Chrome",
+        "Library/Application Support/Microsoft Edge",
+        "AppData/Local/Google/Chrome/User Data",
+        "AppData/Local/Microsoft/Edge/User Data",
+    )
+    normalized = str(sess_dir).replace("\\", "/")
+    if any(marker.lower() in normalized.lower() for marker in user_profile_markers):
+        raise RuntimeError(f"MES 持久会话禁止使用用户日常浏览器 profile：{sess_dir}")
     cdp_url = f"http://127.0.0.1:{port}"
     persistent = start_persistent_session(
-        headless=headless, cdp_port=port, session_dir=session_dir,
+        headless=headless, cdp_port=port, session_dir=sess_dir,
     )
     attempts = max(int(restart_attempts), 0) + 1 if auto_restart else 1
     last_error: BaseException | None = None

@@ -16,38 +16,37 @@ el-cascader 两级结构（如 来源地：事业部 → 车间）需要「先�
 - select_cascade 内部会先调 detect_cascade（或复用传入 diag），hasParentChild=False 时返回 (skip, reason) 不执行任何点击。
 - 选择成功后必须断言输入框回填非空（(ok, value)），否则记 fail（回填空 = 需人工复核）。
 - 若页面下拉不是 el-cascader 两级而是一次性列表/其它组件，直接走「标准用户操作」，不要套用级联步骤。
-## Playwright MCP 真窗口模式（Chrome 扩展，2026-09-04 增补）
+## Playwright MCP 无头隔离模式（默认）
 
-> 定位：与「Python Playwright 脚本」并列的第二种连接方式，只解决「复用真窗口已登录态」这一场景；
-> 判定/纪律类原则仍以 SKILL.md 必守清单为准，此处只写安装、配置与使用钩子。
+> MES 黑盒测试默认使用无头、隔离浏览器；不连接用户日常 Chrome profile、现有标签页或 ONES CDP `9334`。
+> 需要可见窗口时，只有用户明确要求“人工接管”才可临时切换，任务结束后恢复无头配置。
 
-适用场景：被测系统在**日常 Chrome 默认 profile 里已登录**（如已登录的测试站点），希望 AI 直接操控真实窗口、
-复用登录态做黑盒，最贴近真实用户操作。
+Codex 侧 `~/.codex/config.toml` 应配置为：
 
-- 本体：微软官方 `@playwright/mcp`，Codex 侧配置已写入 `~/.codex/config.toml`：
+```toml
+[mcp_servers.playwright]
+type = "stdio"
+command = "npx"
+args = [
+  "-y",
+  "@playwright/mcp@latest",
+  "--headless",
+  "--isolated",
+  "--browser",
+  "chrome",
+  "--viewport-size",
+  "1680x950",
+]
+```
 
-  ```toml
-  [mcp_servers.playwright]
-  type = "stdio"
-  command = "npx"
-  args = ["-y", "@playwright/mcp@latest", "--extension"]
-  ```
+要点：
 
-- 扩展：Chrome Web Store 装 **Playwright MCP Bridge**
-  `https://chromewebstore.google.com/detail/playwright-mcp-bridge/mmlmfjhmonkocbjadbfplnigmagldckm`
-  （装在哪个 Chrome profile，就能连那个 profile 里已登录的标签页）。
-- 免弹窗：点扩展图标打开状态页 → 复制 `PLAYWRIGHT_MCP_EXTENSION_TOKEN` → 写入 config 同节 env：
-
-  ```toml
-  [mcp_servers.playwright.env]
-  PLAYWRIGHT_MCP_EXTENSION_TOKEN = "<用户提供的 token>"
-  ```
-
-  Token 随 profile 走；不配置则每次连接需在扩展弹窗点 approve。
-- 生效条件：改完 config 需**重启 Codex**（新 MCP server 才会加载）；扩展未装时 `--extension` 启动后工具不可用。
-- 使用纪律：与 Python Playwright 一致——一次会话一个持有者、复用标签页、不混用 ONES 常驻 Edge；
-  首个标签页由用户在扩展弹窗里选定（选被测页签），随后按必守清单走标准用户操作，禁止 JS 强制改值/绕过 UI。
-- 与脚本的关系：MCP 真窗口适合「探索/人工登录态复用」，批量回归仍可走 Python 长脚本；两者择一，不双写同一用例。
+- `--headless`：后台静默运行，不显示浏览器窗口。
+- `--isolated`：每次创建新的临时 profile，不读取和修改用户日常登录态。
+- `--browser chrome`：使用本机系统 Chrome，不下载 Playwright 浏览器。
+- 禁止 `--extension` 和 `PLAYWRIGHT_MCP_EXTENSION_TOKEN`；它们会连接用户真实 Chrome。
+- 修改配置后必须重启 Codex，旧 MCP 进程不会自动加载新参数。
+- 一次会话只有一个持有者；不要把 MES MCP 页面与 ONES 常驻 Edge 混用。
 ## 新站点适配侦察定式（2026-09-07 增补）
 
 > 适用：目标站点/组件库与固化站点（示例 Element UI 站点）不同（如自研 sy-*/div-table 组件、

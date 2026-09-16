@@ -148,13 +148,15 @@ def find_page(ctx, url_contains=None, title_contains=None):
     return None
 
 
-def connect(cdp_url="http://127.0.0.1:9334", new_page=False, url_contains=None, title_contains=None):
-    """连接常驻浏览器（CDP，默认 9334），优先复用已有页面。
+def connect(cdp_url=None, new_page=False, url_contains=None, title_contains=None):
+    """连接常驻浏览器（CDP），优先复用已有页面。
 
+    - 默认连接 MES CDP 9222；ONES 调用方必须显式传 9334。
     - 传入 url_contains / title_contains：先查找匹配的页面，命中则复用；未命中才新建。
     - new_page=True 且未指定复用条件：显式新建页面（仅用于确实需要干净页面的场景）。
     - 都不指定：复用第一个页面（避免同一被测页被反复多开）。
     """
+    cdp_url = cdp_url or os.environ.get("MES_CDP_URL", "http://127.0.0.1:9222")
     pw = sync_playwright().start()
     browser = pw.chromium.connect_over_cdp(cdp_url, timeout=20000)
     ctx = browser.contexts[0] if browser.contexts else browser.new_context()

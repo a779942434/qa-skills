@@ -11,7 +11,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from bbt_helpers import connect, disconnect, snap, wait_app_ready  # noqa: E402
+from bbt_helpers import disconnect, snap, wait_app_ready  # noqa: E402
+from bbt_osd_common import ensure_login  # noqa: E402
+from session_helpers import close_session, connect_session, launch_session  # noqa: E402
 
 
 def recon(page, url=None, out_dir=None, feature="recon"):
@@ -86,14 +88,29 @@ def main():
     ap.add_argument("url", nargs="?", help="目标 URL（缺省用当前页）")
     ap.add_argument("--new-tab", action="store_true", help="开新标签页（干净状态）")
     ap.add_argument("--out", default=None, help="截图输出目录")
-    ap.add_argument("--cdp", default="http://127.0.0.1:9334", help="CDP 地址")
+    ap.add_argument(
+        "--cdp", default=None,
+        help="可选 CDP 地址；默认启动独立无头浏览器。MES 禁止连接 ONES 9334。",
+    )
     args = ap.parse_args()
 
-    pw, browser, ctx, page = connect(args.cdp, new_page=args.new_tab)
+    if args.cdp and ":9334" in args.cdp:
+        ap.error("MES 侦察禁止连接 ONES CDP 9334；请使用默认无头隔离浏览器")
+    launched = not bool(args.cdp)
+    if args.cdp:
+        pw, browser, ctx, page = connect_session(args.cdp)
+        if args.new_tab:
+            page = ctx.new_page()
+    else:
+        pw, browser, ctx, page = launch_session(headless=True)
+        ensure_login(page, target_url=args.url, base_url=None)
     try:
         recon(page, url=args.url, out_dir=args.out)
     finally:
-        disconnect(pw)
+        if launched:
+            close_session(pw, browser, ctx, page)
+        else:
+            disconnect(pw)
 
 
 if __name__ == "__main__":
