@@ -9,7 +9,7 @@
 ```
 【触发技能】web-blackbox-testing（造数/提缺陷自动衔接 generate-manufacturing-test-cases / ones-create-linked-defect）
 【任务类型】开始黑盒测试 / 补测 / 修复回归 / 仅提缺陷
-【环境】MES_URL=____；MES_ACCOUNT=____；MES_PASSWORD=____（浏览器统一用本机系统 Chrome 无头隔离运行；禁止连接日常 profile、现有标签页和 ONES 9334，按 skill 必守清单执行）
+【环境】MES_URL=____；MES_ACCOUNT=____；MES_PASSWORD=____（浏览器统一用本机系统 Chrome 无头专用持久 profile 运行；禁止连接日常 profile、现有标签页和 ONES 9334，按 skill 必守清单执行）
 【需求文档】本地文件路径（最常见，如 /Users/xxx/需求.docx）；也支持可访问链接：____
 【测试深度】标准功能测 / 深度专项测 / 快速核心流（不写默认标准功能测）
 【覆盖范围】可写「按需求文档全流程测」；文档含多个功能时建议限定（如【仅 XX 功能】）。具体：____

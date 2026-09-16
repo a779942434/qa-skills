@@ -16,9 +16,9 @@ el-cascader 两级结构（如 来源地：事业部 → 车间）需要「先�
 - select_cascade 内部会先调 detect_cascade（或复用传入 diag），hasParentChild=False 时返回 (skip, reason) 不执行任何点击。
 - 选择成功后必须断言输入框回填非空（(ok, value)），否则记 fail（回填空 = 需人工复核）。
 - 若页面下拉不是 el-cascader 两级而是一次性列表/其它组件，直接走「标准用户操作」，不要套用级联步骤。
-## Playwright MCP 无头隔离模式（默认）
+## Playwright MCP 无头专用持久模式（默认）
 
-> MES 黑盒测试默认使用无头、隔离浏览器；不连接用户日常 Chrome profile、现有标签页或 ONES CDP `9334`。
+> MES 黑盒测试默认使用无头、专用持久 profile；跨任务复用登录态，但不连接用户日常 Chrome profile、现有标签页或 ONES CDP `9334`。
 > 需要可见窗口时，只有用户明确要求“人工接管”才可临时切换，任务结束后恢复无头配置。
 
 Codex 侧 `~/.codex/config.toml` 应配置为：
@@ -31,9 +31,10 @@ args = [
   "-y",
   "@playwright/mcp@latest",
   "--headless",
-  "--isolated",
   "--browser",
   "chrome",
+  "--user-data-dir",
+  "/Users/a77994/.codex/tmp/playwright-mcp-mes",
   "--viewport-size",
   "1680x950",
 ]
@@ -42,11 +43,12 @@ args = [
 要点：
 
 - `--headless`：后台静默运行，不显示浏览器窗口。
-- `--isolated`：每次创建新的临时 profile，不读取和修改用户日常登录态。
 - `--browser chrome`：使用本机系统 Chrome，不下载 Playwright 浏览器。
+- `--user-data-dir`：使用专用持久 profile；Cookie、localStorage 和租户选择跨任务保留。
+- 该目录只允许用于 MES 自动化，禁止改成用户日常 Chrome/Edge profile。
 - 禁止 `--extension` 和 `PLAYWRIGHT_MCP_EXTENSION_TOKEN`；它们会连接用户真实 Chrome。
 - 修改配置后必须重启 Codex，旧 MCP 进程不会自动加载新参数。
-- 一次会话只有一个持有者；不要把 MES MCP 页面与 ONES 常驻 Edge 混用。
+- 同一专用 profile 同时只允许一个 MES 任务持有；不要把 MES MCP 页面与 ONES 常驻 Edge 混用。
 ## 新站点适配侦察定式（2026-09-07 增补）
 
 > 适用：目标站点/组件库与固化站点（示例 Element UI 站点）不同（如自研 sy-*/div-table 组件、
