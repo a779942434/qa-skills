@@ -82,7 +82,7 @@ python scripts/qa_case.py report --run-dir <run-dir>                            
 python scripts/qa_case.py pages  --url <URL> --feature <功能名>                    # 查站点注册表
 ```
 
-- **一次调用跑一批**，禁止一条用例一次调用；`run` 重跑带 `--resume`（`exec` 无 resume，重跑先确认幂等）。实测 65% 的轮次花在「写脚本→跑→读错→改→重跑」上，这是最大的一项提速。
+- **一次调用跑一批**，禁止一条用例一次调用；`run` 重跑带 `--resume`（`exec` 无 resume，重跑先确认幂等）。
 - stdout 只回**单行 JSON 摘要（≤4KB）**；完整现场落 `<run-dir>/cases/<label>.json`，要细节再读该文件。
 - 持久 MES Edge 用独立 profile + CDP 9222；启动前查 `/json/version` + `/json/list`；假死重启后 `--resume` 续跑。
 - 分层超时：动作 5s / 导航 15s / 异步查询 15s / 导入下载 45s（禁止回落默认 30s）。业务完成用 `ApiWatcher.wait_action()` 按 URL+method+body 匹配；表单字段用 `visible_form_item()` 限定可见页签/弹窗；收尾用 `close_surface_stack()`。
@@ -90,7 +90,7 @@ python scripts/qa_case.py pages  --url <URL> --feature <功能名>              
 
 ## 跨会话复用（注册表 + 两级可信度）
 
-- 开工先 `qa_case.py pages --url <URL> --feature <功能名>`：**命中 `verified` 才允许直接 goto**。
+- **复跑/回归**先 `pages --url <URL>`（不带 `--feature` 列全站，0 条=全站新）：命中 `verified` 才可直接 goto；**全新功能直接侦察、不查**。
 - **两级可信度**：验证可达且落到目标页 → `verified:true`；仅观测到（如报错后的中间页）→ `verified:false`，只作线索，仍走 `goto_feature` 并按结果回写。
 - **一致性校验**：命中 verified 并 goto 后校验「标题归一化一致」或「组件库判定一致且为已知库」；不一致自动标 `stale`、降级并回退重侦察。
 - 反复测的页面侦察后 `--save-fingerprint <host>#<功能名>` 固化指纹，改版用 `--diff` 看差异。
