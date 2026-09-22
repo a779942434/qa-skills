@@ -16,6 +16,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", required=True)
     ap.add_argument("--button", default="新增")
+    ap.add_argument("--full", action="store_true", help="不截断（旧行为）")
+    ap.add_argument("--out-dir", default=None, help="截断时完整结构的落盘目录")
     args = ap.parse_args()
     with sync_playwright() as pw:
         browser = launch_mes_browser(pw)
@@ -28,7 +30,14 @@ def main():
             page.locator(".el-dialog .el-select__wrapper").first.click()
             page.wait_for_timeout(800)
             opts = page.locator(".el-select-dropdown__item:visible").all_inner_texts()
-            print("下拉选项:", json.dumps([o.strip() for o in opts if o.strip()], ensure_ascii=False))
+            clean = [o.strip() for o in opts if o.strip()]
+            if args.full:
+                print("下拉选项:", json.dumps(clean, ensure_ascii=False))
+            else:
+                from .. import output as _O
+                payload = {"url": page.url, "title": page.title(), "options": clean}
+                print(_O.emit(payload, kind="recon_dropdown", max_chars=2000,
+                              out_dir=args.out_dir, name=_O.safe_name(args.button)))
         finally:
             browser.close()
 

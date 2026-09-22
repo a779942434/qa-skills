@@ -19,6 +19,9 @@
 | `import_helpers.py` | 导入边界框架：混合文件、部分成功、失败文件下载与解析 |
 | `field_contracts.py` | 页面字段到接口参数的契约注册表 |
 | `data_factory.py` | 测试批次、唯一编号与数据配方前置校验 |
+| `output.py` | **输出限长契约**：`emit()` 截断观察字段并给 counts/full_path；判定字段（toast/内联错误/HTTP/data_diff）永不截断 |
+| `page_registry.py` | **站点/页面注册表**：跨会话复用直达 URL / 等待接口 / 选择器 / 坑；两级可信度 + 一致性校验 |
+| `case_cli.py` | **单用例/批次闭环 CLI**（`scripts/qa_case.py`）：`exec` / `run` / `status` / `report` / `pages`；是 phase_runner 的门面，**不碰状态文件**（由 `tests/test_case_cli_boundary.py` 静态断言） |
 
 ## 环境配置（站点/账号不再写死）
 

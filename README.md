@@ -48,6 +48,31 @@ Codex 实际加载 `~/.codex/skills/` 下的独立副本，与仓库**不同步*
 - 保留目标侧本地文件（如 `scripts/config/databases.yaml`），不会误删；目标目录可用 `CODEX_SKILLS_DIR` 覆盖
 - 需要沙箱外权限（写入 `~/.codex/skills`）
 
+## 提速底座与闸门（2026-09-22）
+
+实测会话成本 ≈ `轮次 × 平均 context`：大富会话 347 轮 / 84.47M 输入（缓存 99.7%），
+其中 **65% 的轮次花在脚本往返、85% 的 context 增长来自工具输出**。为此加了三条底座：
+
+- **单用例/批次闭环**：`python scripts/qa_case.py exec|run|status|report|pages`
+  —— 一次调用跑一批、stdout 只回单行 JSON（≤4KB），完整现场落 `<run-dir>/cases/`。
+- **输出限长契约**：`qa_skill_common/output.py` 的 `emit()`。**判定字段永不截断**
+  （截断会把「有 toast 的拦截」误判成「静默无反馈」，历史上真出过这个误报）；
+  观察字段按上限截断并给出 `counts` / `full_path`。
+- **站点注册表**：`<产物根>/sites/<host>.json`，跨会话复用直达 URL / 等待接口 / 选择器 / 坑。
+  两级可信度（`verified` 才允许直接 goto）+ 一致性校验（标题或组件库判定不一致即降级重侦察）。
+
+**闸门**（防止瘦身之后又长回去）：
+
+```bash
+python3 tools/measure_context.py             # 字符代理口径（各场景必读量 + 预算对比）
+python3 tools/measure_context.py --check     # 超预算即非零退出
+python3 tools/measure_context.py --sessions  # 真实遥测：轮次/输入/缓存/输出/等效全价输入
+python3 tools/check_skill_docs.py            # 断言红线条数 + 每条动作动词 + 结构锚点
+```
+
+`sync-skills.sh` 前置会跑上下文预算与文档闸门；`vendor-common.sh --check` 会追加
+`qa_skill_common` 离线单测。基线数据与验收目标见 `tools/baseline.md`。
+
 ## 公共实现包（qa_skill_common）
 
 `web-blackbox-testing` 与 `ones-create-linked-defect` 共用同一套浏览器/登录/侦察实现。为避免两份代码漂移，仓库只在根目录 `qa_skill_common/` 维护**唯一来源**，再由脚本内置到各技能：

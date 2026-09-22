@@ -52,6 +52,22 @@ MODE="正式同步"
 echo "模式:       $MODE"
 echo
 
+# ---- 前置闸门：文档结构 + 上下文预算（防「瘦身之后又长回去」） ----
+if command -v python3 >/dev/null 2>&1; then
+  echo "===== 前置闸门 ====="
+  python3 "$REPO_DIR/tools/measure_context.py" --check >/tmp/qa_budget.log 2>&1 || {
+    echo "  [失败] 上下文预算未通过，先修文档再同步：" >&2
+    grep -E "✗|结果" /tmp/qa_budget.log | sed 's/^/    /' >&2
+    exit 1
+  }
+  grep -E "^结果" /tmp/qa_budget.log | sed 's/^/  /'
+  python3 "$REPO_DIR/tools/check_skill_docs.py" | tail -1 | sed 's/^/  /' || {
+    echo "  [失败] 文档闸门未通过" >&2; exit 1; }
+  echo
+else
+  echo "[警告] 未找到 python3，跳过前置闸门"
+fi
+
 mkdir -p "$CODEX_SKILLS_DIR"
 
 # 先把公共实现内置到各技能，保证每个技能单目录安装也能运行

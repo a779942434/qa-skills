@@ -58,7 +58,24 @@ for skill in "${TARGET_SKILLS[@]}"; do
   fi
 done
 
+if [ "$MODE" = check ]; then
+  # 单测闸门：公共实现的 L1 离线用例必须全绿
+  echo
+  echo "===== 运行 qa_skill_common 离线单测 ====="
+  if command -v python3 >/dev/null 2>&1; then
+    if (cd "$REPO_DIR" && python3 -m unittest discover -s qa_skill_common/tests -t . >/tmp/qa_common_tests.log 2>&1); then
+      grep -aE '^(OK|FAILED|Ran )' /tmp/qa_common_tests.log | sed 's/^/  /'
+    else
+      echo "  [失败] 单测未通过，详见 /tmp/qa_common_tests.log" >&2
+      tail -20 /tmp/qa_common_tests.log | sed 's/^/  /' >&2
+      failed=1
+    fi
+  else
+    echo "  [警告] 未找到 python3，跳过单测"
+  fi
+fi
+
 if [ "$MODE" = check ] && [ "$failed" -ne 0 ]; then
-  echo "校验失败：请运行 ./vendor-common.sh 重新生成。" >&2
+  echo "校验失败：请运行 ./vendor-common.sh 重新生成，并修掉上面的失败项。" >&2
   exit 1
 fi

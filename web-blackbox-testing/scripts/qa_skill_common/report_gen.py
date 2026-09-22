@@ -4,13 +4,15 @@
 执行脚本在跑完用例后，把结果喂给本工具直接生成 markdown 骨架，
 AI 只补充分析与定级，避免手工整理报告消耗 token。
 """
+from __future__ import annotations
+
 from datetime import datetime
 
 DATE = datetime.now().strftime("%Y-%m-%d")
 
 
 def gen_report(meta: dict, cases: list, problems: list, uncovered: list,
-               evidence: list) -> str:
+               evidence: list, conclusions: list | None = None) -> str:
     """生成测试报告骨架。
 
     meta:        {功能, 环境, 范围, 结果}
@@ -18,6 +20,12 @@ def gen_report(meta: dict, cases: list, problems: list, uncovered: list,
     problems:    [{"id","标题","级别","备注"}]（P0~P4/待确认/环境观察）
     uncovered:   [str] 未覆盖项
     evidence:    [str] 截图/导出/SQL 路径
+    conclusions: [str] 业务结论条目（**结论回流的结构化入参**）
+
+    结论回流纪律：业务结论只以结构化形式给出（`<run-dir>/conclusions.json`
+    的 "结论" 字段），由本函数渲染进报告；测试过程中结论变化时**改数据再
+    重渲染**（`qa_case.py report --run-dir <dir>`），不手写 markdown 正文——
+    避免同一份报告被逐句重写十余次（实测发生过）。
     """
     lines = [
         f"# 测试报告：{meta.get('功能', '')}",
@@ -31,6 +39,11 @@ def gen_report(meta: dict, cases: list, problems: list, uncovered: list,
         f"阻塞 {sum(1 for c in cases if c.get('结果')=='阻塞')}，"
         f"未覆盖 {sum(1 for c in cases if c.get('结果')=='未覆盖')}，"
         f"环境观察 {sum(1 for c in cases if c.get('结果')=='环境观察')}",
+    ]
+    if conclusions:
+        lines += ["", "### 业务结论"]
+        lines += ["- {}".format(str(c)) for c in conclusions]
+    lines += [
         "",
         "## 用例执行结果",
         "| 用例ID | 模块 | 结果 | 阻塞类型 | 证据 |",

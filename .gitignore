@@ -11,3 +11,4 @@ node_modules/
 /fingerprints/
 /.cache/
 /.playwright-mcp/
+/sites/

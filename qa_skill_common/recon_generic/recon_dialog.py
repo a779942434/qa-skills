@@ -15,6 +15,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", required=True)
     ap.add_argument("--button", default="新增")
+    ap.add_argument("--full", action="store_true", help="不截断（旧行为）")
+    ap.add_argument("--out-dir", default=None, help="截断时完整结构的落盘目录")
     args = ap.parse_args()
     with sync_playwright() as pw:
         browser = launch_mes_browser(pw)
@@ -34,10 +36,17 @@ def main():
                     };
                 }"""
             )
-            print("弹窗文本:", data["text"])
-            print("字段:")
-            for it in data["items"]:
-                print(f"  [{it['i']}] {it['label']} select={it['hasSelect']} inputs={it['inputs']}")
+            if args.full:
+                print("弹窗文本:", data["text"])
+                print("字段:")
+                for it in data["items"]:
+                    print(f"  [{it['i']}] {it['label']} select={it['hasSelect']} inputs={it['inputs']}")
+            else:
+                from .. import output as _O
+                payload = {"url": page.url, "title": page.title(),
+                           "dialog_text": data["text"], "fields": data["items"]}
+                print(_O.emit(payload, kind="recon_dialog", max_chars=2000,
+                              out_dir=args.out_dir, name=_O.safe_name(args.button)))
         finally:
             browser.close()
 

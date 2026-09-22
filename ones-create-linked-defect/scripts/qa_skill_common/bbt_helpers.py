@@ -44,6 +44,8 @@ __all__ = [
     "assert_control_type", "select_cascader_values", "wait_dropdown_closed",
     "visible_form_item", "select_single_option", "select_multi_options",
     "set_date_value", "close_surface_stack",
+    # 2026-09-22 失败现场限长摘要（压 context 增长）
+    "failure_summary",
 ]
 
 
@@ -641,9 +643,38 @@ def capture_failure_context(page, out_dir, name, feature="", extra=None, max_dia
         shot = snap(page, name, out_dir, feature=feature)
         json_path = str(Path(shot).with_suffix(".json"))
         Path(json_path).write_text(json.dumps(ctx, ensure_ascii=False, indent=2), encoding="utf-8")
-        return {"screenshot": shot, "json": json_path, "context": ctx}
+        return {"screenshot": shot, "json": json_path, "context": ctx,
+                "summary": failure_summary(ctx, shot, json_path)}
     except Exception:
-        return {"screenshot": "", "json": "", "context": ctx}
+        return {"screenshot": "", "json": "", "context": ctx,
+                "summary": failure_summary(ctx, "", "")}
+
+
+def failure_summary(ctx, screenshot="", json_path="", max_chars=1200):
+    """失败现场的一句话摘要（判定信号完整、观察字段限长）。
+
+    调用方应打印这个而不是 dump 整个 ctx：实测「反复 dump 同一现场」
+    是 context 增长的主因之一。判定信号（toast/内联错误/HTTP）永不截断。
+    """
+    try:
+        from . import output as _O
+        fb = ctx.get("feedback") or {}
+        payload = {
+            "url": ctx.get("url", ""),
+            "title": ctx.get("title", ""),
+            "toasts": fb.get("toasts") or [],
+            "form_errors": fb.get("form_errors") or [],
+            "dialogs_open": fb.get("dialogs_open"),
+            "visible_dialogs": ctx.get("visible_dialogs") or [],
+            "counts": ctx.get("counts") or {},
+            "extra": ctx.get("extra") or {},
+            "screenshot": screenshot,
+            "json": json_path,
+        }
+        return _O.emit(payload, kind="failure", max_chars=max_chars)
+    except Exception:
+        return json.dumps({"url": ctx.get("url", ""), "screenshot": screenshot,
+                           "json": json_path}, ensure_ascii=False)
 
 
 def wait_table_ready(page, timeout=15, min_rows=1):

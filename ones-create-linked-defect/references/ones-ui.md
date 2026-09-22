@@ -1,189 +1,122 @@
 # ONES 界面操作细节与字段映射
 
-## 登录态（复用本机 Edge）
+> 定位：ONES 的**选择器 / 字段 / 交互机制唯一权威**。工作流与纪律在 `SKILL.md`，此处不复述。
 
-- 一键准备：`python scripts/edge_session_setup.py`（幂等；`--force` 强制重新复制）。
-  自动把本机 Edge 的 `Local State`、`Default\Preferences`、`Default\Secure Preferences`、
-  `Default\Network\Cookies`(+journal)、`Default\Network\Network Persistent State`
-  复制到会话目录（默认 `~/.codex/tmp/edge-ones-session`，可在 `config/settings.yaml` 的
-  `edge.session_dir` 修改）。
-- 启动浏览器：`python scripts/ones_edge_server.py [工单URL]`，脚本会先确保会话目录，
-  再用本机 Edge 本体启动（v20 Cookie 只能由 Edge 本体解密），CDP 端口默认 9334
-  （`config/settings.yaml` 的 `cdp_port`）。
-- 监管与恢复：服务周期检查 `/json/version` + `/json/list`；端口假死或 Edge 意外退出时自动重启同一
-  受管 profile 并恢复 ONES 页面。启动参数固定抑制“崩溃恢复气泡”，客户端 `ones_helpers.connect()`
-  只重连、不杀进程；默认最多恢复 3 次（`--max-restarts 0` 表示无限）。
-- 首次若跳 `accounts.feishu.cn` 登录页：以**实际弹出的授权账号/组织**为准（不要预设姓名或公司），点击"授权"回跳；不要重复扫码。
-- 相关 Cookie 域名：`.feishu.cn`（session/session_list/sl_session）、`.ones.shuyilink.com`（ones-lt/ones-uid/ct）。
-
-## 选择器速查（集中维护，SKILL.md 不再重复）
+## 选择器速查（集中维护，改这里一处）
 
 | 目标 | 选择器 / 操作 |
 | --- | --- |
-| 新建关联工作项弹窗 | `[role=dialog]` 且 innerText 含"选择关联关系" |
-| 新建缺陷弹窗定位（稳定版） | 用「含`选择关联关系` + rect 可见」判定，勿用 `offsetParent`；见 `defect_dialog_index()` |
-| 标题输入框 | `#summary`（默认有模板值 `【XX功能】-...`，需替换） |
-| 工作项类型下拉 | innerText 为"请选择类型"的 `.ones-select`；点其 `input.ones-select-selection-search-input`，输入"缺陷"，点 `.ones-select-dropdown` 内含"缺陷"的 option |
-| 表单字段定位（稳定版） | 限定弹窗子树内、叶子文本精确匹配，防同名 label 选错；见 `set_select_option()` |
-| 下拉通用交互 | 聚焦搜索框 → 键入关键词 → 轮询 body 级下拉 option → JS click；见 `set_select_option()` |
-| 弹窗描述编辑器 | `[role=dialog] .cke_wysiwyg_div[contenteditable=true]`（即 `CKEDITOR.instances.editor2`）；页面里 `editor1` 是主工单描述，禁止操作 |
-| 评论输入框 / 发送按钮 | 弹窗底部 `.message-input-border`（点击后初始化 CKEditor）；发送按钮 `.message-input button` 文本"发送" |
-| 文件上传 | 弹窗"文件"区按钮文本"上传文件"，隐藏 `input.upload-input`（`set_input_files` 直接可用） |
-| 上传确认弹窗（稳定版） | 可见 dialog 含`上传文件`且**不含`选择关联关系`**；见 `upload_evidence()` |
-| 提交成功断言 | 弹窗关闭 + 关联数 +1 + 标题查重；见 `submit_defect()` / `dedup_check()` |
-| 缺陷单状态 | `.ones-select.field-input-12`；菜单项已预渲染，点状态框后 `el.click()` 目标项 |
-| 主工单状态卡片 | `.ones-dropdown-trigger`（没有状态下拉字段，用真实鼠标点击打开流转菜单） |
-
-### 缺陷字段 UUID 映射表（实测，跨项目基本稳定，换项目只改 config/field-mapping.yaml 的取值）
-
-| 字段 UUID | 含义 | 取值示例（示意；真实值放 config/field-mapping.local.yaml） |
-| --- | --- | --- |
-| `field001` | 标题 | 【排产结果】… |
-| `field002` | 描述 | 缺陷清单内容 |
-| `5nUKjALP` | 来源项目 | <来源项目名>（`<选项uuid>`） |
-| `Wq56Wyjw` | 产品负责人 | <产品负责人>（`<uuid>`） |
-| `Jtnem8qs` | 来源客户 | <来源客户名>（`<选项uuid>`） |
-| `R3UqL3Vm` | 系统环境 | <系统环境名>（uuid 需 `capture_field_options_fiber()` 捕获后缓存） |
-| `W9qkyVXr` | 功能模块（新） | <功能模块>（`<选项uuid>`） |
-| `field012` | 优先级 | P2（`JYC3tQnb`） |
-| `field004` | 负责人 | 当前 ONES 登录账号（`get_current_user()`，localStorage `user_id`） |
-| `Sg5vqjRr` | 验证人 | 当前 ONES 登录账号（`get_current_user()`） |
-| `95jUV2Mb` | 处理人 | <后端人员>（`<uuid>`）/ <前端人员>（`<uuid>`） |
-| `field038` | 严重程度 | 默认「一般」；黑盒报告的 P0~P4 仅自用，不据此定级 |
-| `DPNDusA2` | 测试责任人 | <测试责任人> |
-| `NnkkhDGK` | 缺陷分类 | 按需 |
+| 新建关联工作项弹窗 | `[role=dialog]` 且 innerText 含「选择关联关系」 |
+| 弹窗定位（稳定版） | 「含`选择关联关系` + `getBoundingClientRect().width>0`」判定；见 `defect_dialog_index()`（工单抽屉也是 `[role=dialog]`，故不能用 `offsetParent`） |
+| 标题输入框 | `#summary`（默认带模板值 `【XX功能】-…`，需替换） |
+| 工作项类型下拉 | innerText 为「请选择类型」的 `.ones-select`；点其 `input.ones-select-selection-search-input`，输入「缺陷」后点 `.ones-select-dropdown` 内 option |
+| 表单字段定位 | 限定弹窗子树内按**叶子文本**精确匹配；「产品负责人」「负责人」在工单抽屉与弹窗同名，全文档搜会选错；见 `set_select_option()` |
+| 下拉通用交互 | 聚焦搜索框 → 键入关键词 → 轮询 body 级 `.ones-select-dropdown [class*=option]` → 点击；uuid 从虚拟列表 `List` fiber 的 `memoizedProps.data[].value` 取（`capture_field_options_fiber()`） |
+| 弹窗描述编辑器 | `[role=dialog] .cke_wysiwyg_div[contenteditable=true]`（即 `CKEDITOR.instances.editor2`）；`editor1` 是主工单描述，**禁止操作** |
+| 评论输入框 / 发送 | 弹窗底部 `.message-input-border`（点击后初始化 CKEditor）；发送按钮 `.message-input button` 文本「发送」 |
+| 文件上传 | 「文件」区按钮文本「上传文件」；隐藏 `input.upload-input` 可直接 `set_input_files` |
+| 上传确认弹窗 | 可见 dialog 含「上传文件」且**不含**「选择关联关系」；见 `upload_evidence()` |
+| 提交成功断言 | 弹窗关闭 + 关联数 +1 + 标题出现；见 `submit_defect()` / `dedup_check()` |
+| 缺陷单状态 | `.ones-select.field-input-12`；菜单项已预渲染（`.ones-menu-item`），点状态框触发渲染后对目标项 `el.click()` |
+| 主工单状态卡片 | `.ones-dropdown-trigger`（**没有状态下拉字段**），用真实鼠标点击打开流转菜单 |
 
 ## 全局常量表（不随项目变，勿每次重新发现）
 
 | 项 | 值 / 获取方式 |
 | --- | --- |
-| 严重程度 option uuid | 致命 `Dgk6PHkS`、严重 `QYe31Dn9`、一般 `XxwMNPQp`、提示 `A3HEmFsu`、建议 `RDtgWTEi`、保留 `MnAwAecn`（`ones_helpers.SEVERITY`） |
-| 提交默认严重程度 | 一般（`ones_helpers.DEFAULT_SEVERITY`）；黑盒报告的 P0~P4 仅内部自用 |
-| 当前登录账号 | `localStorage.user_id` / `user_name`（`ones_helpers.get_current_user()`），负责人/验证人用它 |
-| 缺陷类型 scope | `POST .../items/graphql?t=issue-type-scopes` 查 `issueTypeScopes`，按 `project.uuid + issueType.uuid` 直接得到；常规无需历史缺陷 |
-| 工作项类型「缺陷」 type uuid | `6FUpniBf`（`issue_type_uuid`，区别于 `issue_type_scope_uuid`） |
+| 严重程度 option uuid | 致命 `Dgk6PHkS`／严重 `QYe31Dn9`／一般 `XxwMNPQp`／提示 `A3HEmFsu`／建议 `RDtgWTEi`／保留 `MnAwAecn`（`ones_helpers.SEVERITY`） |
+| 提交默认严重程度 | 一般（`DEFAULT_SEVERITY`）；黑盒报告的 P0~P4 仅内部自用 |
+| 当前登录账号 | `localStorage.user_id` / `user_name`（`get_current_user()`），负责人/验证人用它 |
+| 缺陷类型 scope | `POST .../items/graphql?t=issue-type-scopes` 查 `issueTypeScopes`，按 `project.uuid + issueType.uuid` 直接得到；无需历史缺陷 |
+| 工作项类型「缺陷」 | type uuid `6FUpniBf`（`issue_type_uuid`，区别于 `issue_type_scope_uuid`） |
 
-## 字段映射（具体取值见 config/field-mapping.yaml，换项目只改配置）
+## 缺陷字段 UUID 映射表（跨项目基本稳定，换项目只改 `config/field-mapping.yaml` 取值）
 
-| 缺陷弹窗字段 | 取值来源 |
-| --- | --- |
-| 标题 | 缺陷清单缺陷标题，命名 `【功能名】-问题简述（状态）` |
-| 描述 | 缺陷清单内容：环境/操作步骤/预期/实际/复现率/需求引用/严重程度 |
-| 所属项目 | 自动：标准底座产品（DFS+SaaS） |
-| 来源项目 | `field-mapping.source_project`：keyword 搜索 → name 选择 |
-| 产品负责人 | 主工单产品负责人（搜索姓名） |
-| 系统环境 | `field-mapping.system_env`：keyword 搜索 → name 选择 |
-| 功能模块（新） | `field-mapping.function_modules`，按当前功能选 |
-| 优先级 | `field-mapping.priority`（默认 P2，与主工单一致） |
-| 负责人 / 验证人 | 当前 ONES 登录账号（`get_current_user()`） |
-| 严重程度 | 默认「一般」，不读黑盒报告的 P0~P4 |
-| 处理人 | 动态取自主工单：前端类→前端人员，其余→后端人员；`get_parent_handlers()` |
+| 字段 UUID | 含义 | 取值 |
+| --- | --- | --- |
+| `field001` / `field002` | 标题 / 描述 | 缺陷清单内容 |
+| `5nUKjALP` / `Jtnem8qs` | 来源项目 / 来源客户 | profile 中的选项 uuid |
+| `Wq56Wyjw` | 产品负责人 | 主工单产品负责人 |
+| `R3UqL3Vm` | 系统环境 | 需 `capture_field_options_fiber()` 捕获后缓存 |
+| `W9qkyVXr` | 功能模块（新） | profile 按当前功能选 |
+| `field012` | 优先级 | 默认 P2（`JYC3tQnb`），与主工单一致 |
+| `field004` / `Sg5vqjRr` | 负责人 / 验证人 | 当前 ONES 登录账号（`get_current_user()`） |
+| `95jUV2Mb` | 处理人 | 前端类→前端人员，其余→后端人员（`get_parent_handlers()`） |
+| `field038` | 严重程度 | 默认「一般」 |
+| `DPNDusA2` / `NnkkhDGK` | 测试责任人 / 缺陷分类 | 按需 |
 
-主工单字段可用接口核对：`get_task_info()`（ones_helpers）→
-`GET /project/api/project/team/{team_uuid}/task/{task_uuid}/info`
-（返回 owner=产品负责人、assign=负责人、desc/desc_rich=描述）。
-用户搜索：`search_user()`（ones_helpers）→ `POST .../users/search` body `{"keyword":"姓名","limit":10}`，命中后取 uuid。
+主工单字段核对：`get_task_info()` → `GET /project/api/project/team/{team}/task/{task}/info`（返回 owner / assign / desc）。
+用户搜索：`search_user()` → `POST .../users/search`，body `{"keyword":"姓名","limit":10}`，命中取 uuid。
 
-## API 直连提交缺陷（推荐，替代 UI 弹窗）
+## API 直连提交缺陷（主路径，替代 UI 弹窗）
 
-- 创建缺陷：`POST /project/api/project/team/{team}/tasks/add3`，
-  body `{"tasks":[{"uuid":"<16位>","assign":"<创建者8位uuid>","summary":"标题",
-  "parent_uuid":"","field_values":[{"field_uuid":"...","type":1,"value":"..."},...]}]}`。
-- 关联主工单：`POST /project/api/project/team/{team}/task/{parent_uuid}/related_tasks`，
-  body `{"task_uuids":["<新任务uuid>"],"task_link_type_uuid":"UUID0001",
-  "link_desc_type":"link_out_desc"}`。
-- 字段来源：主工单共有字段 + profile 中的缺陷特有字段（系统环境等）；
-  `sample-defect` 仅为显式兜底，不是提交前置，不允许默认拿历史缺陷复制后直接提交。
-  严重程度默认「一般」，负责人/验证人默认当前登录账号（`build_defect_fields()` 已内置）。
-- 处理人字段（缺陷表单）：`95jUV2Mb`；按规则取主工单前端/后端人员 uuid 后写入该字段。
-- 全 API 构建：`ones_helpers.get_issue_type_scope()` + `get_issue_type_fields()` 解析
-  scope 和字段定义；`build_defect_fields()` 用主工单 + profile/`--system-env` 组装，
-  并在提交前校验必填字段。仅需传入标题/描述/处理人；`create_linked_defect()` 创建+关联，秒级。
-- 附件直传：`upload_task_attachment_api()` 用 `ref_id=<新建 task_uuid>` 调用
-  `POST .../res/attachments/upload` 获取 `resource_uuid/token/upload_url`，
-  再以 multipart `token + file` 上传。无需打开详情页或“文件”页签。
-- 描述内嵌截图：附件上传成功后，对图片文件调用
-  `append_task_description_images(page, team, task_uuid, image_files)`。
-  该函数走真实 CKEditor 图像按钮上传到描述，等待图片完成并保存，随后重新读取
-  `field016/desc_rich` 校验图片节点数。默认在 `ones_submit_defects.py` 中自动执行，
-  `--no-inline-evidence` 可显式关闭。
-- 批量提交顺序：逐条缺陷执行“创建 -> 关联主工单 -> 直传并校验该缺陷附件 -> 描述内嵌图片并回读”，
-  任一步失败即带 uuid 停止，避免后续缺陷继续创建导致张冠李戴。
-- UI 与 API 对比：页面“新增关联工作项”最终仍是创建 + 关联后端动作，额外有弹窗渲染/字段联动；
-  直连 API 少一层 UI 等待，当前按“最快且可核验”的主路径使用。
-
-### 字段选项 UUID 捕获（一次性）
-
-「系统环境」这类下拉需要**选项 UUID**，DOM 不直接暴露，用 `capture_field_options_fiber()` 一次捕获即可：
-
-1. `ones_helpers.open_defect_form(page, team_uuid, task_uuid, title)` 打开新建缺陷弹窗（自动选"缺陷"类型）；
-2. `ones_helpers.capture_field_options_fiber(page, "系统环境", "<环境关键词>")` —— 定位字段下拉、键入关键词，
-   从虚拟列表 `List` fiber 的 `memoizedProps.data[].value` 取 uuid，显示名取可见 option 文本按序对齐，返回 `[{text, uuid}]`；
-3. 把 uuid 写入 `config/field-mapping.yaml` 的 profile（`system_env.option_uuid`），换项目只改配置。
-
-示例：`t-<关键词>-<环境名>` = `<8位uuid>`（换实例需重新捕获并写入 `system_env.option_uuid`）。
+- **创建**：`POST .../tasks/add3`，body `{"tasks":[{"uuid":"<16位>","assign":"<创建者8位uuid>","summary":"标题","parent_uuid":"","field_values":[{"field_uuid":"...","type":1,"value":"..."}]}]}`。
+- **关联主工单**：`POST .../task/{parent_uuid}/related_tasks`，body `{"task_uuids":["<新task_uuid>"],"task_link_type_uuid":"UUID0001","link_desc_type":"link_out_desc"}`。
+- **字段来源**：主工单共有字段 + profile 中的缺陷特有字段；`sample-defect` 仅为显式兜底，
+  **不允许默认拿历史缺陷复制后直接提交**。`build_defect_fields()` 已内置严重程度默认与负责人/验证人默认。
+- **全 API 构建**：`get_issue_type_scope()` + `get_issue_type_fields()` 解析 scope 与字段定义；
+  `build_defect_fields()` 用主工单 + profile/`--system-env` 组装并在提交前校验必填；仅需传标题/描述/处理人；
+  `create_linked_defect()` 创建+关联，秒级。
+- **附件直传**：`upload_task_attachment_api()` 用 `ref_id=<新建 task_uuid>` 调 `POST .../res/attachments/upload`
+  取 `resource_uuid/token/upload_url`，再以 multipart `token + file` 上传；无需打开详情页。
+- **描述内嵌截图**：附件成功后调 `append_task_description_images(page, team, task_uuid, image_files)`
+  ——走真实 CKEditor 图像按钮上传并保存，随后重读 `field016/desc_rich` 校验图片节点数；按节点数幂等。
+  `ones_submit_defects.py` 默认自动执行，`--no-inline-evidence` 显式关闭。
+- **批量顺序**：逐条执行「创建 → 关联 → 直传并核验该条附件 → 内嵌图片并回读」，任一步失败即带 uuid 停止。
+- UI 与 API 的关系：页面「新增关联工作项」最终也是创建 + 关联，只是多一层弹窗渲染/字段联动；直连少一层等待，故为首选。
 
 ## 描述编辑器（CKEditor）
 
-- 清空模板：点击编辑器 → Ctrl+A → Backspace → 输入内容。
-- 进入编辑态不要点描述区域中心（容易命中已有图片并打开预览）；优先点击首个非图片正文段落。
-- 若误开图片预览，先按 Escape 关闭预览，再点正文段落进入编辑态；`append_task_description_images()` 已内置该降级。
-- 内嵌截图（稳定版）：使用 `append_task_description_images()`。它执行：
-  点击描述区域进入编辑态 → 点击 `a.cke_button__onesimage` → 在文件选择器中设置图片 →
-  轮询编辑器中的 `.ones-image-figure img` 直到 `src` 为 https 且图片已加载 → 点击“保存”等待 `tasks/update3` →
-  重新读取任务描述并校验 `<img>` 节点数量。该函数按图片节点数量做幂等，重复调用不会重复插入。
-- ONES 的一个特殊点：保存后的 `field016` 可能仍保留 `data:image/gif` 占位 src，查看态通过
-  `data-uuid`/`data-ref-id` 解析真实图片。因此验证应以查看态的 `.richtext-editor-viewer img`
-  数量、`complete && naturalWidth > 0` 为准，不要只看保存后的 HTML src。
+- 缺陷详情补嵌图片时**不要点描述中心**（常命中已有图片并打开预览），应点首个非图片正文段落；若已打开预览先 Escape。
+- ONES 特殊点：保存后 `field016` 可能仍保留 `data:image/gif` 占位 src，查看态靠 `data-uuid`/`data-ref-id` 解析真实图片。
+  **验证以查看态 `.richtext-editor-viewer img` 数量 + `complete && naturalWidth > 0` 为准**，不要只看保存后 HTML 的 src。
 - 删除多余图片：DOM `img.remove()`（连空容器）后执行 `CKEDITOR.instances.editor2.setData(getData())` 同步。
-- 若用 `execCommand('insertHTML')` 整体注入内容，发送按钮可能保持禁用：末尾输入一个空格再 Backspace 触发 onChange 即可。
+- 用 `execCommand('insertHTML')` 整体注入后发送按钮可能保持禁用：末尾输入一个空格再 Backspace 触发 onChange。
 
-## 文件上传（导入 Excel / 证据文件）
+## 文件上传（导入 Excel / 证据）
 
-- 弹窗"文件"区上传按钮文本"上传文件"；对应隐藏 `input.upload-input`，直接 `set_input_files(path)` 即可（会 dispatch change）。
-- **上传后会弹出"上传文件"确认弹窗（含 文件名/文件描述 输入框），必须点"确定"才会真正挂到工作项**；
-  判定条件：可见 `[role=dialog]` 且文本含`上传文件`且**不含`选择关联关系`**
-  （否则会误点主弹窗"确定"，造成提前提交/重复建单，实测踩过）。
+- 弹窗「文件」区用隐藏 `input.upload-input` 直接 `set_input_files`（会 dispatch change）。
+- **上传后会弹「上传文件」确认弹窗（含文件名/文件描述），必须点「确定」才真正挂到工作项**。
+  判定：可见 `[role=dialog]` 且含「上传文件」且**不含**「选择关联关系」——否则会误点主弹窗「确定」造成提前提交/重复建单（实测踩过）。
   上传成功以 `resource-info-name` 出现为准。
-- 提交后回缺陷详情「文件」页签补传时，用接口状态而非固定 sleep 判成功：
-  `open_task_file_tab()` 等待 `GET /project/api/project/team/{team}/task/{task_uuid}/attachments?since=0` 返回；
-  点击上传确认后，`wait_new_attachments()` 轮询同一接口，直到期望文件名以**新 attachment uuid** 出现。
-  虚拟列表未渲染、上传控件晚出现都不会再误判失败。
+- 提交后回详情「文件」页签补传时，用接口而非固定 sleep 判成功：`open_task_file_tab()` 等
+  `GET .../task/{task_uuid}/attachments?since=0` 返回；点上传确认后 `wait_new_attachments()` 轮询，
+  直到期望文件名以**新 attachment uuid** 出现。虚拟列表未渲染或控件晚出现都不会误判失败。
 
 ## 评论（@处理人 + 未修复说明）
 
-- 评论框：弹窗底部 `.message-input-border`（点击后初始化 CKEditor，`.cke_wysiwyg_div[contenteditable=true]`）；发送按钮 `.message-input button` 文本"发送"。
-- **提及格式（关键）**：富文本里必须是
+- 评论框：弹窗底部 `.message-input-border`（点击后初始化 CKEditor，`.cke_wysiwyg_div[contenteditable=true]`）；发送按钮 `.message-input button`。
+- **提及格式（关键）**：必须是
   `<span class="ones-at-user-block" data-ref-id="<8位用户UUID>" data-ref-name="<姓名>" contenteditable="false">@姓名</span>`
-  - 渲染组件用 `data-ref-id`+`data-ref-name` 显示；只写 `data-name` 会显示成"@"不带名字。
-  - 用户 UUID：`search_user()`（ones_helpers）。
-  - 通过 `document.execCommand('insertHTML')` 注入后发送；先输入文本再注入，末尾触发一次 onChange。
-- 删除评论：悬停评论块 → "删除" → 确认弹窗"删除"。
-- 评论接口（备用）：`send_comment()`（ones_helpers）→ `POST .../send_message` body `{"uuid":"<随机>","content_type":1,"text":"<rich html>"}`。
+  ——只写 `data-name` 会渲染成「@」不带名字。用户 UUID 用 `search_user()`。
+  先输入文本，再用 `document.execCommand('insertHTML')` 注入，末尾触发一次 onChange。
+- 删除评论：悬停评论块 →「删除」→ 确认弹窗「删除」。
+- 备用接口：`send_comment()` → `POST .../send_message`，body `{"uuid":"<随机>","content_type":1,"text":"<rich html>"}`。
 
-## 缺陷单状态流转
+## 状态流转
 
-- 可流转状态接口：`get_transitions()`（ones_helpers）→ `GET .../transitions`（返回 `transitions[]`，含 uuid/name/end_status_uuid）。
-- 缺陷单的"状态"是 `.ones-select.field-input-12`；直接点击可能不展开，
-  但**流转菜单项（`.ones-menu-item`：已关闭/开发待处理/测试通过…）其实已预渲染在 DOM（隐藏）**——
-  点状态输入框触发渲染后直接对目标项 `el.click()` 即可，
-  成功后弹窗内"当前状态/缺陷-关闭时间"即时更新。
-- 常用流转：回归通过 → 已关闭；未修复 → 开发待处理。
+**缺陷单**：可流转状态用 `get_transitions()` → `GET .../transitions`（含 uuid/name/end_status_uuid）。
+状态是 `.ones-select.field-input-12`，直接点击可能不展开，但**流转菜单项（`.ones-menu-item`）已预渲染在 DOM（隐藏）**——
+点状态输入框触发渲染后直接对目标项 `el.click()` 即可，成功后弹窗内「当前状态/关闭时间」即时更新。常用：回归通过→已关闭；未修复→开发待处理。
 
-## 主工单（业务需求/任务）状态流转
-
-- 需求/任务弹窗顶部有"当前状态"卡片（`.ones-dropdown-trigger`），**没有状态下拉字段**；
-  用 Playwright 真实鼠标点击该卡片打开流转菜单
-  （`.ones-menu-item` 列表，含重复副本，点任意可见副本即可）。
-- 部分流转点击菜单项后会弹 **"执行步骤: <目标状态>"确认弹窗**（当前状态→目标状态，含 取消/确定），必须点"确定"才生效。
-- 流转到"集成测试通过待验收"的路径（#200710 实测）：
-  特性测试中 → 特性测试通过（流转后状态显示为"特性测试通过，待集成"）→ 集成测试通过待验收。
-- 下一步可用流转以 `transitions` 接口为准；主工单当前状态可用 `info` 接口的 status_uuid 核对。
+**主工单**：顶部「当前状态」卡片（`.ones-dropdown-trigger`）**没有状态下拉字段**，用 Playwright 真实鼠标点击打开流转菜单
+（`.ones-menu-item` 列表含重复副本，点任意可见副本）。部分流转会弹「执行步骤: <目标状态>」确认弹窗，**必须点「确定」**才生效。
+实测路径（#200710）：特性测试中 → 特性测试通过（显示为「特性测试通过，待集成」）→ 集成测试通过待验收。
+下一步可用流转以 `transitions` 接口为准，当前状态可用 `info` 的 status_uuid 核对。
 
 ## 截图证据目录（按功能区分，勿混用）
 
-- 目录索引维护在 `config/field-mapping.yaml` 的 `evidence_dirs`（功能名 → 目录）。
-- 索引里是历史示例路径，实际以对应功能测试输出目录为准；找不到时先按功能名搜索（人员资质/排产数据等目录不同，勿混用）。
-- 排产数据回传示例：
-  `C:\Users\lenovo\.codex\visualizations\2026\08\05\019fcff3-0102-7cd3-94cf-df207be9e8cf\`
-  （s1_initial、a3_after_import、q1_query_filter_done、BUG-03_修改导入目标不存在.xlsx 等）。
+- 目录索引在 `config/field-mapping.yaml` 的 `evidence_dirs`（功能名 → 目录）；索引里是历史示例路径，
+  实际以对应功能测试输出目录为准，找不到先按功能名搜索（人员资质/排产数据等目录不同，**勿混用**）。
+
+## 易踩坑清单（其余 9 条）
+
+1. 含中文的脚本写成 `.py` 文件（UTF-8）再执行，别用内联 heredoc。
+2. 主工单描述 `editor1` 禁止操作；只动提缺陷弹窗的 `editor2`。
+3. 补嵌图片点非图片段落，不点描述中心（会打开预览）。
+4. 表单字段必须限定弹窗子树 + 叶子文本匹配（同名 label 会选错）。
+5. 证据截图必须与所报功能匹配，贴错会被用户退回。
+6. 下拉选项 teleport 到 body，必须在 body 级 popper 内轮询，别在弹窗内找。
+7. 上传确认弹窗的判定必须排除主弹窗，否则提前提交/重复建单。
+8. 评论 @ 必须带 `data-ref-id` + `data-ref-name`。
+9. 状态流转项虽隐藏但已预渲染，点状态框后直接 `el.click()`。

@@ -138,6 +138,10 @@ def build_parser():
     ap.add_argument("--find", default=None,
                     help="只在侦察结果里检索该文本，只输出命中项（省 token）")
     ap.add_argument("--json", action="store_true", help="以 JSON 输出完整结构")
+    ap.add_argument("--full", action="store_true",
+                    help="不截断（旧行为）；默认输出限长并把完整结构落盘")
+    ap.add_argument("--out-dir", default=None, help="截断时完整结构的落盘目录")
+    ap.add_argument("--max-chars", type=int, default=2000, help="默认输出的字符上限")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--probe", action="store_true", help="组件指纹探针（只读）")
     mode.add_argument("--save-fingerprint", default=None, metavar="NAME",
@@ -174,8 +178,13 @@ def main(argv=None):
                     print(json.dumps(s, ensure_ascii=False, indent=2))
                 elif args.find:
                     print(render_find(s, args.find))
-                else:
+                elif args.full:
                     print(render_text(s))
+                else:
+                    from .. import output as _O
+                    name = _O.safe_name(s.get("title") or "page")
+                    print(_O.emit(s, kind="recon", max_chars=args.max_chars,
+                                  out_dir=args.out_dir, name=name))
         finally:
             browser.close()
 

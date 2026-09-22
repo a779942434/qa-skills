@@ -5,7 +5,8 @@
 - `scripts/recon_page.py`：统一页面侦察器，一次输出 URL/标题/登录态/筛选控件/按钮/表格列头/可见弹窗字段，替代碎片化侦察。
 - `scripts/recon-generic/`：通用页面侦察工具（`--url` 参数化，Element UI 页面可复用）：
   - `recon_page.py --url <URL>`：按钮/表头/行/弹窗；默认行数上限 50（`--limit N` 可调，<=0 不截断），
-    `--find <文本>` 只输出命中项（不 dump 全量、省 token），`--json` 输出完整结构（含 counts）；
+    **默认输出走限长契约**（观察字段截断 + `counts` + `full_path`，`--full` 才不截断、`--out-dir` 指定落盘目录、
+    `--max-chars N` 调预算），`--find <文本>` 只输出命中项（不 dump 全量、省 token），`--json` 输出完整结构（含 counts）；
   - `recon_dialog.py --url <URL> --button 新增`：弹窗表单字段结构（label + 控件类型）；
   - `recon_dropdown.py --url <URL> --button 新增`：下拉可见选项；
   - `recon_subtables.py --url <URL>`：点击主表行 dump 子表。
