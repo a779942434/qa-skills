@@ -49,14 +49,21 @@ DEFAULT_API_TIMEOUT = 45.0
 
 # ---------------------------------------------------------------- 输出
 
-def _emit(payload, *, kind, run_dir=None, label=None, max_chars=MAX_STDOUT_CHARS):
-    """输出到 stdout：单行 JSON、限长；完整版落盘 <run_dir>/cases/。"""
+def _emit(payload, *, kind, run_dir=None, label=None, max_chars=MAX_STDOUT_CHARS,
+          full_path_hint=None):
+    """输出到 stdout：单行 JSON、限长；完整版落盘 <run_dir>/cases/。
+
+    ``full_path_hint``：调用方已自落全量现场时传入，交给 ``O.emit`` 复用，
+    避免同一份现场落两份文件（G2）。
+    """
     out_dir = (Path(run_dir) / "cases") if run_dir else None
-    return O.emit(payload, kind=kind, max_chars=max_chars, out_dir=out_dir, name=label)
+    return O.emit(payload, kind=kind, max_chars=max_chars, out_dir=out_dir, name=label,
+                  reuse_full=full_path_hint)
 
 
-def _finish(payload, *, kind, run_dir=None, label=None, code=0):
-    print(_emit(payload, kind=kind, run_dir=run_dir, label=label))
+def _finish(payload, *, kind, run_dir=None, label=None, code=0, full_path_hint=None):
+    print(_emit(payload, kind=kind, run_dir=run_dir, label=label,
+                full_path_hint=full_path_hint))
     return code
 
 
@@ -317,8 +324,9 @@ def cmd_exec(args):
     stdout_payload["steps"] = stdout_steps
     if detail_path_str:
         stdout_payload["detail_path"] = detail_path_str
+    # G2：全量现场已写 detail_path，stdout 截断时复用它，不再另落 <label>.exec.json
     return _finish(stdout_payload, kind="exec", run_dir=run_dir, label=label,
-                   code=0 if status == "pass" else 1)
+                   code=0 if status == "pass" else 1, full_path_hint=detail_path_str)
 
 
 def _land(page, url, feature, goto_fn):

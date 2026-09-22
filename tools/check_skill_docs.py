@@ -18,6 +18,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_SKILL = ROOT / "web-blackbox-testing/SKILL.md"
+QA_COMMON = ROOT / "qa_skill_common"
+README = QA_COMMON / "README.md"
+# 包初始化文件没有独立职责，不进模块表
+MODULE_INDEX_EXCLUDE = ("__init__.py",)
 
 # 红线最少条数（A 段）。必须等于当前实际条数：留余量会让「新增的红线被删掉」
 # 恰好逃过闸门（8 条时下限设 7，删掉第 8 条仍然通过——实测过）。
@@ -66,6 +70,27 @@ def check_red_lines(text):
     return items, bad
 
 
+def check_module_index():
+    """双向断言 README 模块表与 qa_skill_common 顶层模块一致（G4）。
+
+    单向只堵一半：漏登记新模块会漂移，登记了不存在的模块同样是漂移。
+    这条断言的存在理由：模块表曾靠「改文档时 str.replace 命中」维持，
+    锚点没命中就静默跳过——实测漏登记了 8 个模块。
+    """
+    problems = []
+    if not README.exists():
+        return ["找不到 {}".format(README)]
+    text = README.read_text(encoding="utf-8")
+    listed = set(re.findall(r"^\|\s*`([\w./-]+\.py)`\s*\|", text, re.M))
+    actual = {f.name for f in QA_COMMON.glob("*.py")
+              if f.name not in MODULE_INDEX_EXCLUDE}
+    for name in sorted(actual - listed):
+        problems.append("模块未登记进 README 模块表：{}".format(name))
+    for name in sorted(listed - actual):
+        problems.append("README 模块表登记了不存在的模块：{}".format(name))
+    return problems
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -99,6 +124,12 @@ def main(argv=None):
     # 判定信号不得被截断：这条是防误报的红线，必须留在文档里
     if "判定信号" not in text and "多信号" not in text:
         problems.append("缺少「多信号/判定信号」表述（防误报红线被删）")
+
+    idx = check_module_index()
+    if idx:
+        problems.extend(idx)
+    elif args.verbose:
+        print("模块索引: ✓ 与 qa_skill_common 一致")
 
     if problems:
         print("\n✗ 文档闸门未通过：")

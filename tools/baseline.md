@@ -53,11 +53,12 @@
 - 文档「≤3.5%」是**上限而非预期**：该数字假设文档只读一次，而委外(2) 会话中 `SKILL.md` 被引用 72 次，实际边际贡献更高。
 - 若通道对缓存输入不打折，比例结论不变，但绝对成本放大一个数量级——届时「减少重复读取文档」会跃升为主要项。**换通道后请复测一次。**
 
-## 已知缺口（2026-09-22 审查留档，本轮不修）
+## 已知缺口（2026-09-22 审查留档 → 同日六项全部修复）
 
 > 来源：对提交 `e5af606` 的逐文件对抗性审查。**P0-1（exec 输出撑爆 4KB 上限）与
 > P0-2（http 判定信号恒为空）已在审查后修复中关闭**，不在此清单内。
-> 下列各项均为「不影响本轮承诺」的遗留项，每条注明未修原因，供下一轮取舍。
+> G1–G6 六项 P2 遗留已于同日修复；下面保留原始证据（现象/影响/判定依据）与修复方式，
+> 便于回溯当时为什么判定它是缺陷。
 
 ### G1 · `page_registry.hits` 双计数
 
@@ -65,7 +66,10 @@
   `upsert_page()` 又 +1。实测 `upsert + record_hit + upsert` → `hits=3`，一次 exec 记 +2。
 - **影响**：`hits` 是 `render_for_prompt` 展示的字段，会高估页面复用次数；无功能影响。
 - **判定依据**：`page_registry.py` 的 `upsert_page` 与 `record_hit` 都做 `hits += 1`。
-- **未修原因**：不影响本轮承诺，留给下一轮以免扩大改动面。
+- **已修**：`hits` 收敛为**单一写入者**——`upsert_page` 不再累加（新建为 0），
+  `record_hit` 独占累加，语义定为「验证成功的复用命中次数」。三处把缺陷固化成契约的断言
+  （`test_page_registry` ×2、`test_case_cli` ×1）同步纠正，并补「upsert 不涨 / record_hit 才涨」
+  两条断言。行为验收：登记 → 命中 → 再登记后 `hits == 1`（原为 3）。
 
 ### G2 · `exec` 一次落两份文件
 
@@ -73,14 +77,19 @@
   （`emit` 截断时的 `full_path`）同时存在。
 - **影响**：产物目录出现两份近重复文件，读的人可能困惑；不影响正确性。
 - **判定依据**：`case_cli.cmd_exec` 显式写 `detail_path`，`_finish → _emit → O.emit` 又写一份。
-- **未修原因**：同 G1。
+- **已修**：`output.emit` 新增 `reuse_full=`；`cmd_exec` 把已落盘的 `<label>.json` 路径交给
+  emit 复用——截断时不再另写 `<label>.exec.json`，且因 payload 已有 `detail_path` 指向同一文件，
+  不再补 `full_path` 键。结果：同一现场只留**一份文件、一个路径键**；未传该参的 recon×4 与
+  `bbt_helpers` 行为不变。
 
 ### G3 · `measure_context.run_sessions(only_qa=True)` 是死代码
 
 - **现象**：`if only_qa and "qa-skills" not in path: pass` 分支不做任何事。
 - **影响**：读代码的人会以为存在"只统计 QA 项目会话"的过滤逻辑，实际没有。
 - **判定依据**：`tools/measure_context.py:182`。
-- **未修原因**：同 G1（纯清理，无行为变化）。
+- **已修**：`run_sessions` 改为按 rollout 头部 `session_meta.cwd` **真过滤**；cwd 未知的保守
+  保留并单独计数（不静默丢数据），输出追加口径行，新增 `--all-sessions` 看全部。该模块原先无
+  任何测试，同步补 `tests/test_measure_context.py`（三态判定 + 过滤 + 未知保留）。
 
 ### G4 · `qa_skill_common/README.md` 的 `report_gen` 行未更新
 
@@ -90,14 +99,18 @@
   **不在 skills 的预算集合中**（`measure_context` 只覆盖 SKILL.md / references /
   指定必读集），所以预算闸门不会覆盖到这类"索引类文档"的更新遗漏。
 - **判定依据**：原改写用的 `str.replace` 锚点未命中且**没有加断言**，于是静默跳过。
-- **未修原因**：同 G1。**但它暴露的流程问题值得单独记住：改文档也要断言锚点命中。**
+- **已修**：README 模块表补全 8 个缺失模块（`api_wait`/`bug_report_schema`/`data_cleanup`/
+  `datagrip_datasources`/`env_check`/`fingerprint`/`paths`/`report_gen`）；`check_skill_docs.py`
+  增加**双向断言**（漏登记新模块、登记不存在的模块都拦），负例已验证能拦住。
+  即「改文档也要断言锚点命中」这一教训，已从经验升级为机械闸门。
 
 ### G5 · `ones-create-linked-defect/SKILL.md` 资源列表漏 `qa_case.py`
 
 - **现象**：ones 技能已新增 `scripts/qa_case.py` 入口，但 SKILL 的「资源」清单未列出。
 - **影响**：入口存在却无文档指引；不影响已有流程。
 - **判定依据**：`grep -c qa_case ones-create-linked-defect/SKILL.md` → 0。
-- **未修原因**：同 G1。
+- **已修**：ones SKILL 工作流补一句回归复跑指引（`scripts/qa_case.py exec`/`run`），资源清单
+  补 `qa_case.py`。增量 96 字符，含提缺陷组合 33260 / 预算 33500，仍在闸门内。
 
 ### G6 · `features.json` 键归一化口径不一致
 
@@ -106,4 +119,7 @@
 - **影响**：当 `MES_URL` 含大写字母时，注册表写入的 key 与 `goto_feature` 读取的 key
   不一致 → 直达缓存不命中（退化为走搜索，仅慢，不会错）。
 - **判定依据**：`page_registry.host_of` 与 `bbt_osd_common.goto_feature` 的 key 拼接。
-- **未修原因**：同 G1；实测环境（t-dafu 等）host 全小写，暂不触发。
+- **已修**：新增 `page_registry.cache_key()` 作为 key 构造的**唯一入口**（`host_of` 优先、
+  裸 host 退化为 lower+rstrip），注册表同步与 `goto_feature` 共用；`goto_feature` 的站点归属比较
+  改为大小写不敏感。现有 `.cache/features.json` key 全为小写，**无需迁移**。
+  行为验收：大写 host 写入 → 小写 key → `goto_feature` 命中。

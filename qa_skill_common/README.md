@@ -9,19 +9,27 @@
 
 | 路径 | 内容 |
 | --- | --- |
+| `paths.py` | **统一产物路径解析**：缺陷清单/报告/用例/知识库都相对「产物根 workspace」，保证 web 产出、ones 找得到 |
 | `bbt_helpers.py` | 浏览器连接、错误监听、条件等待、表格读取、截图、数据基线、页面结构侦察与防超时 helper |
+| `api_wait.py` | 接口观测等待：用「等业务接口返回」替代固定 sleep / 立即读 DOM |
 | `bbt_osd_common.py` | MES 登录、导航、表单/表格辅助与幂等造数函数 |
 | `bbt_osd_setup.py` | 产品、工艺路线、工序与 BOM 的一次性造数入口 |
 | `phase_runner.py` | 分阶段执行、弹窗 micro-case 批处理、用例检查点、数据台账、恢复执行与失败分级 |
+| `env_check.py` | 公共环境自检核心：依赖/浏览器/站点/环境变量/目录，每条 FAIL 都给修复命令 |
 | `preflight.py` | 通用预检（URL、活动页签、控件类型、按钮状态） |
 | `session_helpers.py` | 普通会话与持久 MES 会话（CDP 9222）管理；CDP 健康检查、受管 PID 回收、自动重启与检查点恢复配合 |
 | `recon_generic/` | 页面、弹窗、下拉与主子表的四个参数化侦察命令 |
 | `import_helpers.py` | 导入边界框架：混合文件、部分成功、失败文件下载与解析 |
+| `datagrip_datasources.py` | DataGrip 数据源自动发现与只读查询（复用本机已配置连接，免再要连接串） |
 | `field_contracts.py` | 页面字段到接口参数的契约注册表 |
 | `data_factory.py` | 测试批次、唯一编号与数据配方前置校验 |
+| `data_cleanup.py` | 数据基线对比与清理策略：测试改数据后留痕「已恢复 / 未恢复」 |
 | `output.py` | **输出限长契约**：`emit()` 截断观察字段并给 counts/full_path；判定字段（toast/内联错误/HTTP/data_diff）永不截断 |
+| `fingerprint.py` | 元素指纹：组件探针 / 结构快照对比 / 相似度自愈定位 |
 | `page_registry.py` | **站点/页面注册表**：跨会话复用直达 URL / 等待接口 / 选择器 / 坑；两级可信度 + 一致性校验 |
 | `case_cli.py` | **单用例/批次闭环 CLI**（`scripts/qa_case.py`）：`exec` / `run` / `status` / `report` / `pages`；是 phase_runner 的门面，**不碰状态文件**（由 `tests/test_case_cli_boundary.py` 静态断言） |
+| `report_gen.py` | 报告/缺陷清单骨架生成：`gen_report(..., conclusions=)` 接结构化结论，改 `conclusions.json` 再重渲染，禁止手写正文 |
+| `bug_report_schema.py` | **缺陷清单 schema**：web 产出与 ones 解析的唯一契约（标题/字段/证据行） |
 
 ## 环境配置（站点/账号不再写死）
 

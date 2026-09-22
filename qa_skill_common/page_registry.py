@@ -41,6 +41,20 @@ def host_of(url: str) -> str:
     return m.group(1).rstrip("/").lower() if m else ""
 
 
+def cache_key(base: str, feature: str) -> str:
+    """功能直达缓存（``.cache/features.json``）key 构造的**唯一入口**。
+
+    口径 ``<站点根>|<功能名>``：站点根优先取 ``host_of()`` 的结果（已小写 +
+    去尾斜杠）；``host_of`` 认不出（如裸 host）时退化为原始串的
+    ``strip().rstrip("/").lower()``。
+
+    注册表同步与 ``goto_feature`` 必须共用本函数——两处各写一遍就会漂移出
+    「写入用小写、读取用原样」这类不命中（G6）。
+    """
+    host = host_of(base) or str(base or "").strip().rstrip("/").lower()
+    return "{}|{}".format(host, feature)
+
+
 def _safe_host(host: str) -> str:
     s = re.sub(r"[^\w\-.]+", "_", str(host or ""), flags=re.UNICODE).strip("_")
     return s[:120] or "unknown-host"
@@ -107,7 +121,7 @@ def _feature_cache_sync(host: str, feature: str, url: str) -> None:
             data = json.loads(p.read_text(encoding="utf-8")) or {}
         except Exception:
             data = {}
-        data["{}|{}".format(host, feature)] = url
+        data[cache_key(host, feature)] = url
         tmp = p.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
         os.replace(tmp, p)
@@ -122,7 +136,8 @@ def upsert_page(host: str, feature: str, *, url: str, verified: bool,
 
     - ``verified=True`` 仅在「URL 被验证可达且落到目标页」时传入。
     - 未显式给出的字段保持原值（不覆盖已有情报）。
-    - ``hits`` 累加；``verified_at`` 只在 verified=True 时刷新。
+    - **``hits`` 不在这里累加**（唯一写入者是 ``record_hit``）；``verified_at`` 只在
+      verified=True 时刷新。
     """
     data = load(host)
     pages = data.setdefault("pages", {})
@@ -145,7 +160,9 @@ def upsert_page(host: str, feature: str, *, url: str, verified: bool,
             if g not in merged:
                 merged.append(g)
         entry["gotchas"] = merged
-    entry["hits"] = int(entry.get("hits") or 0) + 1
+    # hits 是「验证成功的复用命中次数」，唯一写入者是 record_hit()——
+    # 本函数只登记/刷新元数据，绝不累加，否则一次 exec 会被计两次（G1）。
+    entry.setdefault("hits", 0)
     entry["last_seen"] = _now()
     if verified:
         entry["verified_at"] = _now()

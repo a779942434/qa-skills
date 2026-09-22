@@ -92,6 +92,7 @@ description: >-
      弹窗/字段细节见 `references/ones-ui.md`。
    - 提交后断言弹窗关闭 + 关联内容数量 +1，并用 `list_related_tasks()` + `dedup_check()` 查重；
      发现同标题重复立即提示处理。
+   > 回归需复跑用例时用 `scripts/qa_case.py`（`exec` 单条 / `run` 批量），不要手写临时脚本。
 4. **回归后处理缺陷单**（以清单「回归验证」为准）：
    - 通过 / 产品口径不算缺陷 → 打开对应缺陷单 → 流转为「已关闭」。
    - 未通过 → 打开缺陷单 → 评论 @处理人（`data-ref-id`+`data-ref-name` 格式）写明「未修复 + 回归结果 + 证据」，
@@ -112,6 +113,6 @@ description: >-
 
 - 脚本：`check_env.py`（自检）、`ones_bootstrap.py`（一键引导）、`ones_edge_server.py` / `edge_session_setup.py`
   （常驻浏览器/登录态）、`ones_submit_defects.py`（批量提缺陷 CLI）、`ones_project_setup.py`（新项目接入）、
-  `ones_backfill_evidence.py`（附件+描述内嵌回填）、`ones_config.py`（配置）、`ones_helpers.py`（CDP + ONES 接口/弹窗封装）。
+  `ones_backfill_evidence.py`（附件+描述内嵌回填）、`ones_config.py`（配置）、`ones_helpers.py`（CDP + ONES 接口/弹窗封装）、`qa_case.py`（单用例/批次闭环，回归复跑）。
 - 配置：`config/settings.yaml`（环境/浏览器）、`config/field-mapping.yaml`（字段映射与证据目录）。
 - 文档：`references/ones-ui.md`（选择器速查、字段映射、编辑器/上传、状态流转、易踩坑清单）。

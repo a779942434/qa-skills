@@ -158,7 +158,8 @@ def goto_feature(page, name, base_url=None, wait_ms=None, use_cache=True, refres
     if not base:
         raise RuntimeError("无法确定站点根地址：请设置 MES_URL 或传 base_url")
 
-    key = f"{base}|{name}"
+    from .page_registry import cache_key as _cache_key   # 延迟导入避免顶层耦合
+    key = _cache_key(base, name)                         # G6：与写入侧共用同一口径
     if use_cache and not refresh:
         cached = _feature_cache_load().get(key)
         if cached:
@@ -166,14 +167,15 @@ def goto_feature(page, name, base_url=None, wait_ms=None, use_cache=True, refres
                 page.goto(cached, wait_until="domcontentloaded", timeout=60000)
                 wait_app_ready(page)
                 # 缓存 URL 若失效（被重定向到 home），回退到搜索
-                if base_url_for(page.url) == base and page.url.rstrip("/") != base.rstrip("/"):
+                if base_url_for(page.url).lower() == base.lower() \
+                        and page.url.rstrip("/") != base.rstrip("/"):
                     return page.url
             except Exception:
                 pass
 
     # 已在首页就不用再整页刷新
-    cur = (page.url or "").rstrip("/")
-    if cur not in (base, base + "/home"):
+    cur = (page.url or "").rstrip("/").lower()
+    if cur not in (base.lower(), (base + "/home").lower()):
         page.goto(base + "/home", wait_until="domcontentloaded", timeout=60000)
         wait_app_ready(page)
 

@@ -252,7 +252,8 @@ class TestRegistryNavigation(unittest.TestCase):
         self.assertEqual(calls, [self.HOST + "/plan/monthly/index"])
         self.assertIn("直接 goto", note)
         self.assertTrue(verified_ok)                   # P1-5：验证成功才为 True
-        self.assertEqual(REG.get_page(self.HOST, self.FEAT)["hits"], 2)  # upsert + record_hit
+        # G1：一次落地只记一次命中——upsert 登记后由 record_hit 独占累加
+        self.assertEqual(REG.get_page(self.HOST, self.FEAT)["hits"], 1)
 
     def test_stale_entry_falls_back_and_downgrades(self):
         REG.upsert_page(self.HOST, self.FEAT, url=self.HOST + "/plan/old/index",
@@ -295,6 +296,33 @@ class TestRegistryNavigation(unittest.TestCase):
         self.assertEqual(rc, 0)
         payload = json.loads(out)
         self.assertIn("月度工序计划", payload["registry"])
+
+
+class TestExecSingleFile(unittest.TestCase):
+    """G2：exec 现场只落一份文件，stdout 不出现第二个路径键。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.run_dir = Path(self.tmp.name)
+
+    def test_emit_reuses_prewritten_full(self):
+        case_out = self.run_dir / "cases"
+        case_out.mkdir(parents=True, exist_ok=True)
+        detail = case_out / "C01.json"
+        detail.write_text("{}", encoding="utf-8")
+        payload = {"status": "pass", "detail_path": str(detail),
+                   "steps": [{"i": i, "detail": "x" * 200} for i in range(40)]}
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            C._finish(payload, kind="exec", run_dir=self.run_dir, label="C01",
+                      code=0, full_path_hint=str(detail))
+        got = json.loads(buf.getvalue())
+        self.assertTrue(got["truncated"])
+        self.assertNotIn("full_path", got)
+        self.assertEqual(got["detail_path"], str(detail))
+        # 目录里只有调用方写的那一份，没有 <label>.exec.json
+        self.assertEqual(sorted(q.name for q in case_out.iterdir()), ["C01.json"])
 
 
 class TestParserWiring(unittest.TestCase):

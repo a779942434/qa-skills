@@ -52,6 +52,29 @@ class TestEmit(unittest.TestCase):
         self.assertTrue(Path(got["full_path"]).exists())
         self.assertLessEqual(len(text), 400)
 
+    def test_reuse_full_skips_second_copy(self):
+        """G2：调用方已落盘全量时，emit 不另写一份，也不补 full_path 键。"""
+        detail = self.out / "detail.json"
+        detail.write_text("{}", encoding="utf-8")
+        cases = self.out / "cases"
+        payload = {"detail_path": str(detail), "elements": _big_elements()}
+        text = O.emit(payload, kind="exec", max_chars=400, out_dir=cases,
+                      name="c1", reuse_full=str(detail))
+        got = json.loads(text)
+        self.assertTrue(got["truncated"])                      # 仍按预算截断
+        self.assertNotIn("full_path", got)                     # 不再出现第二个键名
+        self.assertEqual(got["detail_path"], str(detail))
+        self.assertFalse(cases.exists() and any(cases.iterdir()))   # 没有第二份文件
+
+    def test_reuse_full_without_payload_path_falls_back(self):
+        """G2 兜底：payload 里没有该路径时仍以 full_path 报出，不丢逃生舱。"""
+        detail = self.out / "detail.json"
+        detail.write_text("{}", encoding="utf-8")
+        text = O.emit({"elements": _big_elements()}, kind="exec", max_chars=400,
+                      out_dir=self.out / "cases", name="c1", reuse_full=str(detail))
+        got = json.loads(text)
+        self.assertEqual(got["full_path"], str(detail))
+
     def test_signals_never_dropped_even_when_over_budget(self):
         """不可截断部分本身超预算时，保判据并标 over_budget。"""
         payload = {"toasts": ["T" * 600], "elements": [{"i": i} for i in range(50)]}

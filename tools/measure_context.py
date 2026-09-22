@@ -159,10 +159,50 @@ def run_chars(check=False):
     return ok_all, results
 
 
+def _is_qa_session(cwd):
+    """按 cwd 判定是否 QA 技能会话。
+
+    返回 True / False / **None（未知）** 三态：rollout 头部没有 session_meta 或
+    cwd 为空时返回 None——调用方对未知一律**保留**，避免静默丢数据。
+    """
+    s = str(cwd or "")
+    if not s:
+        return None
+    return "qa-skills" in s
+
+
+def _session_cwd(path, max_lines=5):
+    """从 rollout 头部读 session_meta.cwd；取不到返回空串。"""
+    for i, line in enumerate(_iter_lines(path)):
+        if i >= max_lines:
+            break
+        try:
+            o = json.loads(line)
+        except Exception:
+            continue
+        if o.get("type") == "session_meta":
+            return str((o.get("payload") or {}).get("cwd") or "")
+    return ""
+
+
 def run_sessions(limit=0, only_qa=True):
-    """真实遥测：解析本机 rollout 的 token_count 事件。"""
+    """真实遥测：解析本机 rollout 的 token_count 事件。
+
+    ``only_qa=True`` 时按 rollout 头部的 cwd 过滤出 qa-skills 项目的会话；
+    cwd 未知的一律保留并单独计数（宁滥勿缺）。传 ``only_qa=False`` 看全部。
+    """
     rows = []
+    scanned = qa_hits = unknown_cwd = 0
     for path in sorted(glob.glob(SESSIONS_GLOB, recursive=True)):
+        scanned += 1
+        cwd = _session_cwd(path)
+        qa = _is_qa_session(cwd)
+        if qa is True:
+            qa_hits += 1
+        elif qa is None:
+            unknown_cwd += 1
+        if only_qa and qa is False:
+            continue                       # 明确属于其它项目 -> 过滤
         turns = 0
         last = None
         for line in _iter_lines(path):
@@ -179,12 +219,11 @@ def run_sessions(limit=0, only_qa=True):
                     last = u
         if not last:
             continue
-        if only_qa and "qa-skills" not in path:
-            pass  # 目录名不含 cwd，保留全部；用下方 cwd 检查兜底
         uncached = max(0, last.get("input_tokens", 0) - last.get("cached_input_tokens", 0))
         fpe = last.get("cached_input_tokens", 0) * CACHE_PRICE + uncached
         rows.append({
             "file": os.path.basename(path),
+            "cwd": cwd,
             "turns": turns,
             "input": last.get("input_tokens", 0),
             "cached": last.get("cached_input_tokens", 0),
@@ -206,6 +245,11 @@ def run_sessions(limit=0, only_qa=True):
             r["uncached"] / 1e6, r["output"] / 1e3, r["fpe"] / 1e6))
     print("\n等效全价输入 = 缓存×{:.1f} + 未缓存（缓存计价系数，改 CACHE_PRICE 可调）"
           .format(CACHE_PRICE))
+    if only_qa:
+        print("过滤口径：扫描 {} 份 rollout；命中 QA {} 份；cwd 未知保留 {} 份"
+              "（--all-sessions 可看全部）".format(scanned, qa_hits, unknown_cwd))
+    else:
+        print("口径：全部 {} 份 rollout（--all-sessions）".format(scanned))
     return rows
 
 
@@ -223,10 +267,12 @@ def main(argv=None):
     ap.add_argument("--check", action="store_true", help="超预算即非零退出（CI 闸门）")
     ap.add_argument("--sessions", action="store_true", help="输出真实会话用量（本机）")
     ap.add_argument("--limit", type=int, default=0, help="--sessions 的显示条数")
+    ap.add_argument("--all-sessions", action="store_true",
+                    help="--sessions 时不过滤项目（默认只看 qa-skills）")
     args = ap.parse_args(argv)
 
     if args.sessions:
-        run_sessions(limit=args.limit)
+        run_sessions(limit=args.limit, only_qa=not args.all_sessions)
         return 0
 
     ok, _ = run_chars(check=args.check)

@@ -48,13 +48,25 @@ class TestStore(unittest.TestCase):
         entry = R.get_page(HOST, FEAT)
         self.assertTrue(entry["verified"])
         self.assertEqual(entry["title"], "月度工序计划")
-        self.assertEqual(entry["hits"], 1)
+        # G1：登记/刷新元数据不算「复用命中」，新建条目 hits 从 0 起
+        self.assertEqual(entry["hits"], 0)
 
-    def test_repeat_upsert_no_duplicate_and_hits_increment(self):
+    def test_repeat_upsert_no_duplicate_and_no_hit_increment(self):
+        """G1：upsert 只登记/刷新，hits 的唯一写入者是 record_hit。"""
         R.upsert_page(HOST, FEAT, url=HOST + "/a", verified=True)
         R.upsert_page(HOST, FEAT, url=HOST + "/a", verified=True)
         data = R.load(HOST)
         self.assertEqual(len(data["pages"]), 1)
+        self.assertEqual(R.get_page(HOST, FEAT)["hits"], 0)
+
+    def test_record_hit_is_only_incrementer(self):
+        """G1：同一语义只有一个写入者——record_hit 累加，upsert 不累加。"""
+        R.record_hit(HOST, FEAT)                     # 条目不存在 -> 安全 no-op，不创建
+        self.assertIsNone(R.get_page(HOST, FEAT))
+        R.upsert_page(HOST, FEAT, url=HOST + "/a", verified=True)
+        self.assertEqual(R.get_page(HOST, FEAT)["hits"], 0)
+        R.record_hit(HOST, FEAT)
+        R.record_hit(HOST, FEAT)
         self.assertEqual(R.get_page(HOST, FEAT)["hits"], 2)
 
     def test_upsert_preserves_existing_intel(self):
@@ -70,7 +82,24 @@ class TestStore(unittest.TestCase):
     def test_upsert_syncs_features_cache(self):
         R.upsert_page(HOST, FEAT, url=HOST + "/a", verified=True)
         cache = json.loads((self.root / ".cache" / "features.json").read_text(encoding="utf-8"))
-        self.assertEqual(cache["{}|{}".format(HOST, FEAT)], HOST + "/a")
+        self.assertEqual(cache[R.cache_key(HOST, FEAT)], HOST + "/a")
+
+    def test_cache_key_normalizes_case_and_trailing_slash(self):
+        """G6：大小写与尾斜杠不同必须得到同一个 key（写入/读取口径唯一）。"""
+        self.assertEqual(R.cache_key(HOST, FEAT), R.cache_key(HOST.upper(), FEAT))
+        self.assertEqual(R.cache_key(HOST, FEAT), R.cache_key(HOST + "/", FEAT))
+        self.assertEqual(R.cache_key(HOST, FEAT), "{}|{}".format(HOST, FEAT))
+
+    def test_cache_key_accepts_bare_host(self):
+        """G6：host_of 认不出的裸 host 也要归一化（小写 + 去尾斜杠）。"""
+        self.assertEqual(R.cache_key("T-DAFU.ob.shuyilink.com/", FEAT),
+                         "t-dafu.ob.shuyilink.com|{}".format(FEAT))
+
+    def test_upsert_syncs_features_cache_with_uppercase_host(self):
+        """G6：写入侧 host 大小写不同，key 归一化后读取侧仍能命中。"""
+        R.upsert_page(HOST.upper(), FEAT, url=HOST + "/a", verified=True)
+        cache = json.loads((self.root / ".cache" / "features.json").read_text(encoding="utf-8"))
+        self.assertIn(R.cache_key(HOST, FEAT), cache)
 
     def test_corrupt_json_self_heals(self):
         p = R.registry_path(HOST)

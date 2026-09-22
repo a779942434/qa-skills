@@ -99,8 +99,13 @@ def _shrink(value, keep: int):
 
 
 def emit(payload, *, kind="generic", max_chars=DEFAULT_MAX_CHARS, out_dir=None,
-         name=None, trunable_keys=None, full=None):
+         name=None, trunable_keys=None, full=None, reuse_full=None):
     """输出 payload，超过 max_chars 时截断观察字段并给出 counts/full_path。
+
+    ``reuse_full``：调用方**已自行落盘**全量文件时传入其路径。此时不再重复
+    落盘；若 payload 里已有指向该文件的键（如 ``detail_path``），也不再补
+    ``full_path``——避免同一份现场出现两个文件名/两个键名（G2）。路径信息
+    一旦在 payload 中缺失，仍会以 ``full_path`` 兜底，不丢逃生舱。
 
     - payload 非 dict 时按 ``{"value": payload}`` 处理。
     - 不可截断键（判定字段 + 未知键）永远完整保留；若它们本身就超预算，
@@ -119,7 +124,12 @@ def emit(payload, *, kind="generic", max_chars=DEFAULT_MAX_CHARS, out_dir=None,
     shrink = {k: v for k, v in payload.items() if k in keys}
     counts = {k: _counts_of(v) for k, v in shrink.items()}
 
-    full_path = _write_full(text, out_dir, name, kind)
+    reuse = str(reuse_full) if reuse_full else ""
+    if reuse:
+        already_referenced = any(str(v) == reuse for v in payload.values())
+        full_ref = reuse if not already_referenced else ""
+    else:
+        full_ref = _write_full(text, out_dir, name, kind)
 
     # 逐步收紧可截断字段，直到整体落进预算（若不可截断部分本身超预算则直接停）
     keep_ratio = 0.5
@@ -136,8 +146,8 @@ def emit(payload, *, kind="generic", max_chars=DEFAULT_MAX_CHARS, out_dir=None,
         trial["counts"] = counts
         if omitted:
             trial["omitted"] = omitted
-        if full_path:
-            trial["full_path"] = full_path
+        if full_ref:
+            trial["full_path"] = full_ref
         trial["truncated"] = True
         candidate = _dump(trial)
         if len(candidate) <= max_chars:
@@ -150,16 +160,16 @@ def emit(payload, *, kind="generic", max_chars=DEFAULT_MAX_CHARS, out_dir=None,
         for k, v in shrink.items():
             trial[k] = [] if isinstance(v, list) else ""
         trial["counts"] = counts
-        if full_path:
-            trial["full_path"] = full_path
+        if full_ref:
+            trial["full_path"] = full_ref
         trial["truncated"] = True
         candidate = _dump(trial)
         if len(candidate) > max_chars:
             # 不可截断部分本身超预算：保判据，超预算输出
             trial = dict(kept)
             trial["counts"] = counts
-            if full_path:
-                trial["full_path"] = full_path
+            if full_ref:
+                trial["full_path"] = full_ref
             trial["truncated"] = True
             trial["over_budget"] = True
             trial["budget"] = max_chars
