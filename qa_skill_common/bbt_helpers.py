@@ -1252,13 +1252,21 @@ def click_or_observe(page, btn_text, btn_sel="button", timeout=6.0):
         return ("fail", "点击[%s]失败:%s" % (btn_text, repr(e)[:100]))
 
 
-def reset_to(page, url, tab_text=None, wait_ms=6000):
+def reset_to(page, url, tab_text=None, wait_ms=None):
     """用例前置：导航回已知态（可选切页签），保证用例间独立、避免脏状态延续。
+
+    **等待策略（2026-09-22 修正）**：默认**条件等待** ``wait_app_ready``（应用外壳
+    出现 → loading 遮罩消失 → 网络短静默），不再默认固定 sleep。实测原实现每条用例
+    固定等 6s（3 条用例的截图间隔精确 6.0s，白等 18s／总时长 75%），且违反
+    SKILL「禁止长固定 sleep」。``wait_ms`` 仅在调用方显式传入时兜底，封顶 800ms
+    （与 ``sleep`` 动作同规）。
 
     用例隔离：每条用例前调用，把页面重置到确定起点；结合 try/except，单条失败不中断整段。
     """
     page.goto(url, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(wait_ms)
+    wait_app_ready(page)
+    if wait_ms:
+        page.wait_for_timeout(min(int(wait_ms), 800))
     if tab_text:
         try:
             page.locator(".el-tabs__item", has_text=tab_text).first.click(timeout=8000)

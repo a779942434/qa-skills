@@ -133,6 +133,38 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
+class TestResetToNoFixedSleep(unittest.TestCase):
+    """修正：reset_to 默认条件等待，不再固定 sleep。
+
+    实测依据：原实现 wait_ms=6000，3 条用例的截图间隔精确 6.0s，白等 18s
+    （占 run 总时长 75%），换成条件等待后同类任务 23.9s → 11.0s。
+    """
+
+    class P:
+        def __init__(self):
+            self.gotoed = None
+            self.waits = []
+
+        def goto(self, url, **kwargs):
+            self.gotoed = url
+
+        def wait_for_timeout(self, ms):
+            self.waits.append(ms)
+
+    def test_default_uses_conditional_wait(self):
+        p = self.P()
+        with mock.patch.object(H, "wait_app_ready", lambda *a, **k: True):
+            H.reset_to(p, "http://x.example/y")
+        self.assertEqual(p.gotoed, "http://x.example/y")
+        self.assertEqual(p.waits, [])          # 默认不再固定等待
+
+    def test_explicit_wait_ms_is_capped(self):
+        p = self.P()
+        with mock.patch.object(H, "wait_app_ready", lambda *a, **k: True):
+            H.reset_to(p, "http://x.example/y", wait_ms=6000)
+        self.assertEqual(p.waits, [800])       # 显式传入也封顶 800ms（同 sleep 动作）
+
+
 class FakeElement:
     def __init__(self, tag="DIV", desc=None, attrs=None):
         self.tag = tag

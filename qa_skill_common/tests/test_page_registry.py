@@ -31,6 +31,75 @@ class TestHostAndPaths(unittest.TestCase):
                          "http_t-dafu.ob.shuyilink.com#月度工序计划")
 
 
+class TestDirectCacheTrust(unittest.TestCase):
+    """G7：只有「验证成功」的落地才能进直达缓存，脏缓存要能被自愈清除。
+
+    实测依据（2026-09-22）：登录失败时 page.url 是 oauth 跳转页，旧实现无条件
+    写 features.json，此后每次 goto_feature 都跳到登录页且被当成命中；真实存量
+    缓存里也确实出现过 `<host>/home`（dog 站点的「委外发料明细」）。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        p = mock.patch("qa_skill_common.paths.workspace_root", return_value=self.root)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _cache(self):
+        f = self.root / ".cache" / "features.json"
+        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+
+    def test_unverified_upsert_does_not_write_cache(self):
+        R.upsert_page(HOST, FEAT, url=HOST + "/login", verified=False)
+        self.assertNotIn(R.cache_key(HOST, FEAT), self._cache())
+
+    def test_unverified_upsert_clears_stale_cache(self):
+        R.upsert_page(HOST, FEAT, url=HOST + "/plan/x", verified=True)
+        self.assertIn(R.cache_key(HOST, FEAT), self._cache())
+        R.upsert_page(HOST, FEAT, url=HOST + "/login", verified=False)
+        self.assertNotIn(R.cache_key(HOST, FEAT), self._cache())
+
+    def test_is_real_landing_rejects_home_auth_and_other_site(self):
+        from qa_skill_common import bbt_osd_common as B
+        self.assertTrue(B._is_real_landing(HOST + "/plan/work-plan/order-plan/index", HOST))
+        self.assertFalse(B._is_real_landing(HOST + "/home", HOST))
+        self.assertFalse(B._is_real_landing(HOST, HOST))
+        self.assertFalse(B._is_real_landing(
+            HOST + "/iam/realms/mvp/protocol/openid-connect/auth?x=1", HOST))
+        self.assertFalse(B._is_real_landing("http://other.example/x", HOST))
+        self.assertFalse(B._is_real_landing("", HOST))
+
+    def test_poisoned_cache_is_ignored_and_cleared(self):
+        from qa_skill_common import bbt_osd_common as B
+        B._feature_cache_save(R.cache_key(HOST, FEAT), HOST + "/home")
+
+        class Loc:
+            @property
+            def first(self):
+                return self
+
+            def count(self):
+                return 0
+
+        class P:
+            def __init__(self):
+                self.url = HOST + "/home"
+
+            def goto(self, url, **kwargs):
+                self.url = url
+
+            def locator(self, selector):
+                return Loc()
+
+        p = P()
+        with mock.patch.object(B, "wait_app_ready", lambda *a, **k: None):
+            got = B.goto_feature(p, FEAT, base_url=HOST)
+        self.assertIsNone(got)                                # 没把 /home 当命中
+        self.assertNotIn(R.cache_key(HOST, FEAT), self._cache())   # 脏缓存已清除
+
+
 class TestStore(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

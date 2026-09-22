@@ -24,7 +24,8 @@ description: >-
 
 1. **自检**：`python scripts/check_env.py`（缺浏览器/依赖/站点不通会明确指出）。
 2. **配环境**：`export MES_URL=... MES_ACCOUNT=... MES_PASSWORD=...`（总表见 `scripts/qa_skill_common/references/environment.md`）。
-3. **开跑**：`python scripts/qa_case.py exec --steps <steps.json> --run-dir <run-dir> --label <ID>`。
+3. **开跑**：复制 `scripts/run_all_template.py` 到 `<run-dir>/run_all.py`，改 `CONFIG`/`CASES` 后
+   `python scripts/qa_case.py run --spec <run-dir>/run_all.py`——**一批一次调用**；探索单步才用 `exec`。
 
 > 平台不限；浏览器用本机 Chrome/Edge/Chromium（`MES_BROWSER_PATH` 可指定），依赖只装 `pip install playwright pyyaml`。
 >
@@ -81,7 +82,6 @@ python scripts/qa_case.py report --run-dir <run-dir>                            
 python scripts/qa_case.py pages  --url <URL> --feature <功能名>                    # 查站点注册表
 ```
 
-- 总入口脚本从 `scripts/run_all_template.py` 复制到 `<run-dir>/run_all.py` 后按任务改 CONFIG。
 - **一次调用跑一批**，禁止一条用例一次调用；`run` 重跑带 `--resume`（`exec` 无 resume，重跑先确认幂等）。实测 65% 的轮次花在「写脚本→跑→读错→改→重跑」上，这是最大的一项提速。
 - stdout 只回**单行 JSON 摘要（≤4KB）**；完整现场落 `<run-dir>/cases/<label>.json`，要细节再读该文件。
 - 持久 MES Edge 用独立 profile + CDP 9222；启动前查 `/json/version` + `/json/list`；假死重启后 `--resume` 续跑。

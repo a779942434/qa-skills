@@ -144,6 +144,33 @@ def _feature_cache_save(key, url):
         pass
 
 
+def _is_real_landing(landed, base):
+    """落地页是否算「真跳到了功能页」。
+
+    需要同站点，且**不是**站点根、``/home`` 或登录/授权跳转页。原判定「URL 非 base
+    即算命中」会把 ``/home`` 和 oauth 页都当成命中——2026-09-22 实测缓存里出现过
+    ``<host>/home`` 与 ``.../protocol/openid-connect/auth?...`` 两种脏值。
+    """
+    if not landed:
+        return False
+    b = str(base or "").lower().rstrip("/")
+    l = str(landed).lower().rstrip("/")
+    if not b or base_url_for(landed).lower() != b:
+        return False
+    if l in (b, b + "/home"):
+        return False
+    return not any(t in l for t in ("/login", "/auth", "oauth", "keycloak", "realms"))
+
+
+def _forget_cache(base, name):
+    """清掉一条失效的直达缓存（委托 page_registry，路径与 key 口径保持唯一）。"""
+    try:
+        from .page_registry import forget_cache
+        forget_cache(base, name)
+    except Exception:
+        pass
+
+
 def goto_feature(page, name, base_url=None, wait_ms=None, use_cache=True, refresh=False):
     """用首页「搜索功能」按功能名直达目标页面，返回落地 URL（失败返回 None）。
 
@@ -166,10 +193,10 @@ def goto_feature(page, name, base_url=None, wait_ms=None, use_cache=True, refres
             try:
                 page.goto(cached, wait_until="domcontentloaded", timeout=60000)
                 wait_app_ready(page)
-                # 缓存 URL 若失效（被重定向到 home），回退到搜索
-                if base_url_for(page.url).lower() == base.lower() \
-                        and page.url.rstrip("/") != base.rstrip("/"):
+                if _is_real_landing(page.url, base):
                     return page.url
+                # 落地是站点根/首页/登录授权页 → 缓存已被污染，清掉并回退搜索
+                _forget_cache(base, name)
             except Exception:
                 pass
 

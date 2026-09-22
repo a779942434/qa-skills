@@ -129,6 +129,34 @@ def _feature_cache_sync(host: str, feature: str, url: str) -> None:
         pass
 
 
+def forget_cache(host: str, feature: str) -> None:
+    """删除一条直达缓存条目（失败不抛错）。
+
+    用途：未验证成功的落地**不得**占据直达缓存（``goto_feature`` 命中即直接 goto，
+    没有可信度分级）。2026-09-22 实测：登录失败时 ``page.url`` 是 oauth 登录跳转页，
+    旧实现把它写进 ``features.json``，此后每次都会跳到登录页并被当成命中。
+    """
+    if not (host and feature):
+        return
+    try:
+        from . import paths
+        p = paths.workspace_root() / ".cache" / "features.json"
+        if not p.exists():
+            return
+        try:
+            data = json.loads(p.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return
+        key = cache_key(host, feature)
+        if key in data:
+            del data[key]
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+            os.replace(tmp, p)
+    except Exception:
+        pass
+
+
 def upsert_page(host: str, feature: str, *, url: str, verified: bool,
                 title=None, probe_verdict=None, fingerprint=None,
                 waits=None, selectors=None, gotchas=None) -> Path:
@@ -170,7 +198,12 @@ def upsert_page(host: str, feature: str, *, url: str, verified: bool,
     pages[feature] = entry
     path = save(host, data)
     if entry["url"]:
-        _feature_cache_sync(host, feature, entry["url"])
+        # 只有「验证成功」的落地才配进直达缓存；未验证的条目要主动清掉旧缓存，
+        # 否则一次登录失败就能把登录页固化成「功能直达 URL」（G7）。
+        if verified:
+            _feature_cache_sync(host, feature, entry["url"])
+        else:
+            forget_cache(host, feature)
     return path
 
 
