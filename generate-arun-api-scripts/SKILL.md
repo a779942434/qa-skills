@@ -30,7 +30,7 @@ ARun 平台的步骤数组 JSON，数组元素是「纯脚本步骤」或「接�
 
 用户输入命中模板名时，模板负责步骤骨架、标准断言与变量链，用户不用逐条交代调用顺序和校验逻辑。模板清单（详见 [references/business-templates.md](references/business-templates.md)）：
 
-- 基础模板：`crud`（5 步）、`crud+detail`（10 步，骨架参照 examples/问题点定义表_steps.json）。
+- 基础模板：`crud`（5 步）、`crud+detail`（10 步，骨架参照 examples/problem-point_steps.json）。
 - 模式模板：`count-before-after`（前后数量对比）、`generate-cancel`（生成-撤销-清零）、`status-verify`（状态流转校验）、`loop-items`（循环逐个处理）、`passthrough-body`（整值透传）、`if-switch`（条件分支）。
 - 完整链路：`production-schedule`（生产排产全链路约 30 步）、`shift-handover`（交接班）。
 
