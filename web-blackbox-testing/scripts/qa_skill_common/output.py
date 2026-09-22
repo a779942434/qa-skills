@@ -30,6 +30,8 @@ TRUNCATABLE_KEYS = (
     "visible_dialogs", "options", "items", "fields", "cells", "candidates",
     "snapshots", "nodes", "columns", "cards", "tabs", "labels",
     "tables", "dialog_text", "records", "log_lines",
+    # CLI 主载荷：steps/results 是逐条观察明细，必须可截断（否则 exec 输出会撑爆 stdout 上限）
+    "steps", "results",
 )
 
 # 判定类键：显式声明，供 emit_signals 与调用方自检

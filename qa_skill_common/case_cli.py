@@ -34,6 +34,11 @@ from . import output as O
 from . import page_registry as REG
 from .phase_runner import RunState
 
+# stdout 硬上限（4 KiB）。依据：单次工具结果控制在 ~600–1000 tokens 量级，
+# 与「压每轮新增 context」这条主线一致。实测余量：run 载荷 496 字符、
+# exec 紧凑 40 步 2030 字符（均 <4096）；而带 detail 的 40 步是 55870 字符，
+# 说明**上限不是问题、载荷结构才是**——detail 因此一律落盘、不进 stdout。
+# 注意：4096 是设计取值，不是测量或宿主限制推导出来的。
 MAX_STDOUT_CHARS = 4096
 
 # 单步超时基线（与 SKILL「执行形态与等待基线」一致）
@@ -62,20 +67,35 @@ def _err(msg, *, next_hint="", code=2, run_dir=None, label=None):
 
 # ---------------------------------------------------------------- steps 引擎
 
+def stdout_step(i, action, ok, ms, error=""):
+    """构造 stdout 的 step 行：**只留判定所需字段**，detail 一律不进 stdout。
+
+    两级输出是 4KB 上限能"结构性成立"的关键：带 detail 的 40 步是 55870 字符，
+    紧凑行只有 2030 字符。error 是判定字段，必须留在 stdout。
+    """
+    row = {"i": i, "action": action, "ok": bool(ok), "ms": int(ms)}
+    if error:
+        row["error"] = error
+    return row
+
+
 def _net_of(watcher, limit=20):
-    """把监听到的响应压成判定用的 http 列表（**判定字段，不截断**）。"""
-    out = []
+    """把监听到的响应压成判定用的 http 列表（**判定字段，不截断**）。
+
+    返回 ``(rows, error)``。error 非空表示这次没能取到信号——**必须上报**，
+    不能静默返回空列表：HTTP 信号是红线 A#7「多信号交叉判定」的四源之一，
+    静默变空会让「已发出请求」被误判成「无新响应」。
+    """
     try:
-        for r in (watcher.snapshot() if hasattr(watcher, "snapshot") else [])[-limit:]:
-            out.append({
-                "url": r.get("url", ""),
-                "method": r.get("method", ""),
-                "status": r.get("status"),
-                "ms": r.get("duration_ms") or r.get("ms"),
-            })
-    except Exception:
-        pass
-    return out
+        rows = watcher.recent(limit) if hasattr(watcher, "recent") else []
+        return [{
+            "url": r.get("url", ""),
+            "method": r.get("method", ""),
+            "status": r.get("status"),
+            "ms": r.get("duration_ms") or r.get("ms"),
+        } for r in (rows or [])], ""
+    except Exception as exc:
+        return [], "{}: {}".format(type(exc).__name__, exc)[:200]
 
 
 def _api_step(page, watcher, step):
@@ -201,11 +221,11 @@ def cmd_exec(args):
     case_out.mkdir(parents=True, exist_ok=True)
 
     started = time.time()
-    results, evidence = [], []
+    results, stdout_steps, evidence = [], [], []
     toasts, form_errors = [], []
     status = "pass"
     next_hint = ""
-    steps_table = []
+    net_error = ""
 
     steps_note = ""
     with sync_playwright() as pw:
@@ -219,21 +239,27 @@ def cmd_exec(args):
             if url:
                 login_for_page(page, url)
                 from .bbt_osd_common import goto as _goto
-                landed, note = _land(page, url, feature, _goto)
+                landed, note, verified_ok = _land(page, url, feature, _goto)
                 host = REG.host_of(page.url or url)
                 if host and feature:
-                    REG.upsert_page(host, feature, url=page.url, verified=True,
-                                    title=_safe_title(page), fingerprint=REG.fingerprint_name(host, feature))
-                if note:
-                    steps_note = note
+                    # 只有真实验证成功才登记 verified=True；否则按「仅观测」登记，
+                    # 下次仍走 goto_feature 重侦察——避免把落错的页面永久缓存。
+                    REG.upsert_page(host, feature, url=page.url, verified=verified_ok,
+                                    title=_safe_title(page),
+                                    fingerprint=REG.fingerprint_name(host, feature))
+                if note or not verified_ok:
+                    steps_note = note or "落地页未验证通过（已按仅观测登记），下次仍走按功能名搜索"
             for i, step in enumerate(steps):
                 t0 = time.time()
                 try:
                     ok, detail, ev = _run_step(page, watcher, step, i, out_dir, label, feature)
                 except Exception as exc:
+                    err = "{}: {}".format(type(exc).__name__, exc)[:300]
+                    ms = int((time.time() - t0) * 1000)
+                    # error 是判定字段：detail 落盘，error 必须留在 stdout
                     results.append({"i": i, "action": step.get("action"),
-                                    "ok": False, "ms": int((time.time() - t0) * 1000),
-                                    "error": "{}: {}".format(type(exc).__name__, exc)[:300]})
+                                    "ok": False, "ms": ms, "error": err})
+                    stdout_steps.append(stdout_step(i, step.get("action"), False, ms, err))
                     status = "fail"
                     try:
                         shot = H.snap(page, "{}_step{}_fail".format(label, i), out_dir, feature=feature)
@@ -247,13 +273,15 @@ def cmd_exec(args):
                     break
                 if ev:
                     evidence.append(ev)
+                ms = int((time.time() - t0) * 1000)
+                # 两级输出：detail 只进 cases/<label>.json；stdout 只留判定所需字段
                 results.append({"i": i, "action": step.get("action"), "ok": bool(ok),
-                                "ms": int((time.time() - t0) * 1000), "detail": detail})
-                steps_table.append({"i": i, "action": step.get("action"), "ok": bool(ok)})
+                                "ms": ms, "detail": detail})
+                stdout_steps.append(stdout_step(i, step.get("action"), ok, ms))
             fb = _read_fb(page, H)
             toasts = list(dict.fromkeys(toasts + (fb.get("toasts") or [])))
             form_errors = list(dict.fromkeys(form_errors + (fb.get("form_errors") or [])))
-            http = _net_of(watcher)
+            http, net_error = _net_of(watcher)
         finally:
             try:
                 browser.close()
@@ -261,26 +289,35 @@ def cmd_exec(args):
                 pass
 
     elapsed = int((time.time() - started) * 1000)
-    payload = {
+    signals = {"toasts": toasts, "form_errors": form_errors,
+               "http": http, "data_diff": {}}
+    if net_error:
+        # 取信号失败必须显式可见，不能静默成空列表（红线 A#7 四源之一）
+        signals["_net_error"] = net_error
+    full_payload = {
         "label": label,
         "status": status,
         "ms": elapsed,
-        "signals": {"toasts": toasts, "form_errors": form_errors,
-                    "http": http, "data_diff": {}},
-        "steps": results,
+        "signals": signals,
+        "steps": results,              # 含 detail
         "evidence": evidence,
         "next_hint": next_hint,
     }
     if steps_note:
-        payload["registry"] = steps_note
-    # 完整现场（含每步 detail）落盘，stdout 只回摘要
+        full_payload["registry"] = steps_note
+    # 完整现场（含每步 detail）落盘；stdout 只回紧凑摘要
     try:
-        detail_path = case_out / "{}.json".format(O._safe_name(label))
-        detail_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        payload["detail_path"] = str(detail_path)
+        detail_path = case_out / "{}.json".format(O.safe_name(label))
+        detail_path.write_text(json.dumps(full_payload, ensure_ascii=False, indent=2),
+                               encoding="utf-8")
+        detail_path_str = str(detail_path)
     except Exception:
-        pass
-    return _finish(payload, kind="exec", run_dir=run_dir, label=label,
+        detail_path_str = ""
+    stdout_payload = dict(full_payload)
+    stdout_payload["steps"] = stdout_steps
+    if detail_path_str:
+        stdout_payload["detail_path"] = detail_path_str
+    return _finish(stdout_payload, kind="exec", run_dir=run_dir, label=label,
                    code=0 if status == "pass" else 1)
 
 
@@ -290,6 +327,8 @@ def _land(page, url, feature, goto_fn):
     - 命中 verified=True → 直接 goto，再校验标题/组件库；不一致则标 stale、
       降级为仅观测，并回退走 goto_feature 重侦察。
     - 未命中 / 仅观测 → 直接走 goto_feature（按功能名搜索）。
+    - 返回 ``(landed_url, note, verified_ok)``；**只有前两条路径算验证成功**，
+      最后的兜底 goto 不算——调用方必须据此决定注册表写 verified 还是仅观测。
     """
     host = REG.host_of(url)
     entry = REG.get_page(host, feature) if (host and feature) else None
@@ -300,7 +339,7 @@ def _land(page, url, feature, goto_fn):
             check = REG.check_landing(page, host, feature)
             if check.get("status") == "ok":
                 REG.record_hit(host, feature)
-                return page.url, "直接 goto（注册表命中且校验通过）"
+                return page.url, "直接 goto（注册表命中且校验通过）", True
             note = "注册表条目已失效（{}），回退按功能名搜索".format(check.get("status"))
         except Exception as exc:
             note = "注册表 URL 不可达（{}），回退按功能名搜索".format(type(exc).__name__)
@@ -308,11 +347,11 @@ def _land(page, url, feature, goto_fn):
         from .bbt_osd_common import goto_feature
         landed = goto_feature(page, feature, base_url=host, use_cache=False) if feature else None
         if landed:
-            return landed, note
-    except Exception:
-        pass
+            return landed, note, True
+    except Exception as exc:
+        note = note or "按功能名搜索失败（{}）".format(type(exc).__name__)
     goto_fn(page, url)
-    return page.url, note
+    return page.url, note or "按功能名搜索未命中，已回退到给定 URL（未验证）", False
 
 
 def cmd_pages(args):
@@ -355,6 +394,28 @@ def cmd_status(args):
     return _finish(payload, kind="status", run_dir=run_dir, label="status", code=0)
 
 
+def _resolve_state_dir(spec_path: Path, explicit=None) -> Path:
+    """定位检查点目录（P1-1：必须与 spec 实际写入同源）。
+
+    优先级：``--run-dir`` > spec 同目录（已有检查点）> ``RUN_STATE_DIR``
+    > ``<产物根>/knowledge-base/test-reports/state``（run_all_template 的默认值）。
+    都不存在时回退 spec 同目录，并由调用方向子进程导出 RUN_STATE_DIR 保证一致。
+    """
+    if explicit:
+        return Path(explicit).expanduser()
+    candidates = [spec_path.parent]
+    env_dir = os.environ.get("RUN_STATE_DIR", "").strip()
+    if env_dir:
+        candidates.append(Path(env_dir).expanduser())
+    try:
+        from . import paths
+        candidates.append(paths.test_reports_dir() / "state")
+    except Exception:
+        pass
+    found = RunState.find_existing(candidates)   # 文件名由 RunState 独占维护
+    return found if found else candidates[0]
+
+
 def cmd_run(args):
     """跑 spec（run_all.py）：透传 --resume/--phase/--connect，然后回紧凑摘要。
 
@@ -375,7 +436,10 @@ def cmd_run(args):
     env.setdefault("PYTHONIOENCODING", "utf-8")
     if args.case:
         env["QA_ONLY_CASE"] = args.case
-    run_dir = Path(args.run_dir).expanduser() if args.run_dir else spec.parent
+    run_dir = _resolve_state_dir(spec, args.run_dir)
+    # 让子进程写进我们将要读的目录（不覆盖用户显式设置的 RUN_STATE_DIR）
+    if not env.get("RUN_STATE_DIR"):
+        env["RUN_STATE_DIR"] = str(run_dir)
     t0 = time.time()
     try:
         proc = subprocess.run(cmd, cwd=str(spec.parent), env=env,

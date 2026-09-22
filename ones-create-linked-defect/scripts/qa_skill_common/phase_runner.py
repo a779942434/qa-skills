@@ -171,12 +171,14 @@ class RunState:
     """run_state.json + data_ledger.json 的读写与状态查询。"""
 
     SCHEMA_VERSION = 1
+    STATE_FILE = "run_state.json"
+    LEDGER_FILE = "data_ledger.json"
 
     def __init__(self, state_dir: str | Path, run_id: str, feature: str = "", data: dict | None = None):
         self.state_dir = Path(state_dir).expanduser()
-        self.state_path = self.state_dir / "run_state.json"
-        self.backup_path = self.state_dir / "run_state.json.bak"
-        self.ledger_path = self.state_dir / "data_ledger.json"
+        self.state_path = self.state_dir / self.STATE_FILE
+        self.backup_path = self.state_dir / (self.STATE_FILE + ".bak")
+        self.ledger_path = self.state_dir / self.LEDGER_FILE
         self.data = data.get("data", {}) if data else {}
         self.data_meta = data.get("data_meta", {}) if data else {}
         self.run_id = data.get("run_id", run_id) if data else run_id
@@ -189,10 +191,25 @@ class RunState:
         self.meta: dict = data.get("meta", {}) if data else {}
 
     @classmethod
+    def find_existing(cls, candidates):
+        """在候选目录里找出**已有检查点**的目录；找不到返回 None。
+
+        状态文件名由本类独占维护，外部（如 CLI 门面）不应自己拼文件名探测——
+        因此这里提供公共入口，避免调用方硬编码状态文件名。
+        """
+        for cand in candidates:
+            try:
+                if (Path(cand).expanduser() / cls.STATE_FILE).exists():
+                    return Path(cand).expanduser()
+            except Exception:
+                continue
+        return None
+
+    @classmethod
     def load_or_create(cls, state_dir: str | Path, run_id: str, feature: str = ""):
         state_dir = Path(state_dir).expanduser()
-        state_path = state_dir / "run_state.json"
-        backup_path = state_dir / "run_state.json.bak"
+        state_path = state_dir / cls.STATE_FILE
+        backup_path = state_dir / (cls.STATE_FILE + ".bak")
         for candidate in (state_path, backup_path):
             if not candidate.exists():
                 continue

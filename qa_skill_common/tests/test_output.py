@@ -86,6 +86,54 @@ class TestEmit(unittest.TestCase):
         self.assertNotIn("full_path", got)      # 无 out_dir 时不落盘也不报错
 
 
+class TestExecPayloadBudget(unittest.TestCase):
+    """回归：exec 载荷曾以 55,870 字符撑爆 4KB 上限（steps 不在可截断键里）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    @staticmethod
+    def _steps(n=40, with_detail=True):
+        rows = []
+        for i in range(n):
+            row = {"i": i, "action": "read", "ok": True, "ms": 12}
+            if with_detail:
+                row["detail"] = {"selector": ".el-table__row", "total": 120,
+                                 "head": ["x" * 60] * 20}
+            rows.append(row)
+        return rows
+
+    def _payload(self, steps):
+        return {"label": "C07", "status": "pass", "ms": 1840,
+                "signals": {"toasts": [], "form_errors": [],
+                            "http": [{"url": "/api/x", "status": 200, "ms": 88}],
+                            "data_diff": {}},
+                "steps": steps, "evidence": ["/tmp/a.png"], "next_hint": ""}
+
+    def test_steps_is_truncatable(self):
+        self.assertIn("steps", O.TRUNCATABLE_KEYS)
+        self.assertIn("results", O.TRUNCATABLE_KEYS)
+
+    def test_compact_exec_payload_fits_4kb(self):
+        text = O.emit(self._payload(self._steps(with_detail=False)),
+                      kind="exec", max_chars=4096)
+        self.assertLessEqual(len(text), 4096)
+        self.assertFalse(json.loads(text).get("truncated", False))
+        self.assertEqual(len(json.loads(text)["steps"]), 40)
+
+    def test_detail_laden_payload_is_bounded_and_keeps_signals(self):
+        text = O.emit(self._payload(self._steps(with_detail=True)),
+                      kind="exec", max_chars=4096, out_dir=self.tmp.name, name="C07")
+        self.assertLessEqual(len(text), 4096)
+        got = json.loads(text)
+        self.assertTrue(got["truncated"])
+        self.assertLess(len(got["steps"]), 40)          # 兜底生效
+        self.assertTrue(got["full_path"])
+        self.assertEqual(got["signals"]["http"],
+                         [{"url": "/api/x", "status": 200, "ms": 88}])   # 判据完整
+
+
 class TestSummarize(unittest.TestCase):
     def test_summarize_gives_totals(self):
         s = O.summarize({"rows": list(range(50)), "url": "u"})

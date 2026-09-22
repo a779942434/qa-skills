@@ -82,9 +82,9 @@ python scripts/qa_case.py pages  --url <URL> --feature <功能名>              
 ```
 
 - 总入口脚本从 `scripts/run_all_template.py` 复制到 `<run-dir>/run_all.py` 后按任务改 CONFIG。
-- **一次调用跑一批**，禁止一条用例一次调用；重跑必须带 `--resume`。实测 65% 的轮次花在「写脚本→跑→读错→改→重跑」上，这是最大的一项提速。
-- stdout 只回**单行 JSON 摘要（≤4KB）**；完整现场落 `<run-dir>/cases/<label>.json`，要细节再读该文件，不重复 dump。
-- 持久 MES Edge 用独立 profile + CDP 9222；启动/恢复前查 `/json/version` + `/json/list`；假死重启后 `--resume` 续跑。
+- **一次调用跑一批**，禁止一条用例一次调用；`run` 重跑带 `--resume`（`exec` 无 resume，重跑先确认幂等）。实测 65% 的轮次花在「写脚本→跑→读错→改→重跑」上，这是最大的一项提速。
+- stdout 只回**单行 JSON 摘要（≤4KB）**；完整现场落 `<run-dir>/cases/<label>.json`，要细节再读该文件。
+- 持久 MES Edge 用独立 profile + CDP 9222；启动前查 `/json/version` + `/json/list`；假死重启后 `--resume` 续跑。
 - 分层超时：动作 5s / 导航 15s / 异步查询 15s / 导入下载 45s（禁止回落默认 30s）。业务完成用 `ApiWatcher.wait_action()` 按 URL+method+body 匹配；表单字段用 `visible_form_item()` 限定可见页签/弹窗；收尾用 `close_surface_stack()`。
 - 失败只抓一次 `capture_failure_context` 并**打印其 `summary`**（判据完整、观察限长），禁止反复白等。细节见 [references/playwright-strategy.md](references/playwright-strategy.md)。
 

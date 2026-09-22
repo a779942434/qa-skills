@@ -19,8 +19,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 WEB_SKILL = ROOT / "web-blackbox-testing/SKILL.md"
 
-# 红线最少条数（A 段）；少于这个数说明被删条了
-RED_LINE_MIN = 7
+# 红线最少条数（A 段）。必须等于当前实际条数：留余量会让「新增的红线被删掉」
+# 恰好逃过闸门（8 条时下限设 7，删掉第 8 条仍然通过——实测过）。
+RED_LINE_MIN = 8
+# 必须逐条存在的关键红线（计数挡不住"删掉某一条"，这里按语义锚点兜住）
+RED_LINE_MUST_HAVE = ("输出限长", "判定信号", "多信号", "不脑补", "标准用户操作")
 # 每条红线必须含约束性表述（禁止/必须/…），否则视为空话被稀释
 ACTION_VERBS = ("禁止", "必须", "不得", "不许", "不要", "只用", "只做",
                 "只操作", "仅", "一律", "统一", "不泄露", "不碰", "不写入",
@@ -88,6 +91,10 @@ def main(argv=None):
     for marker, label in REQUIRED_MARKERS:
         if marker not in text:
             problems.append("缺少结构锚点：{}（{}）".format(marker, label))
+
+    for kw in RED_LINE_MUST_HAVE:
+        if kw not in text:
+            problems.append("缺少关键红线关键词：{}".format(kw))
 
     # 判定信号不得被截断：这条是防误报的红线，必须留在文档里
     if "判定信号" not in text and "多信号" not in text:

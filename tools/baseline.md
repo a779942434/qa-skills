@@ -52,3 +52,58 @@
 - 跨会话直接比轮次不成立（用例数不同）；比较必须固定题目。
 - 文档「≤3.5%」是**上限而非预期**：该数字假设文档只读一次，而委外(2) 会话中 `SKILL.md` 被引用 72 次，实际边际贡献更高。
 - 若通道对缓存输入不打折，比例结论不变，但绝对成本放大一个数量级——届时「减少重复读取文档」会跃升为主要项。**换通道后请复测一次。**
+
+## 已知缺口（2026-09-22 审查留档，本轮不修）
+
+> 来源：对提交 `e5af606` 的逐文件对抗性审查。**P0-1（exec 输出撑爆 4KB 上限）与
+> P0-2（http 判定信号恒为空）已在审查后修复中关闭**，不在此清单内。
+> 下列各项均为「不影响本轮承诺」的遗留项，每条注明未修原因，供下一轮取舍。
+
+### G1 · `page_registry.hits` 双计数
+
+- **现象**：`case_cli._land()` 成功路径调 `record_hit()`（+1），随后 `cmd_exec` 的
+  `upsert_page()` 又 +1。实测 `upsert + record_hit + upsert` → `hits=3`，一次 exec 记 +2。
+- **影响**：`hits` 是 `render_for_prompt` 展示的字段，会高估页面复用次数；无功能影响。
+- **判定依据**：`page_registry.py` 的 `upsert_page` 与 `record_hit` 都做 `hits += 1`。
+- **未修原因**：不影响本轮承诺，留给下一轮以免扩大改动面。
+
+### G2 · `exec` 一次落两份文件
+
+- **现象**：`<run-dir>/cases/<label>.json`（手写全量）与 `<label>.exec.json`
+  （`emit` 截断时的 `full_path`）同时存在。
+- **影响**：产物目录出现两份近重复文件，读的人可能困惑；不影响正确性。
+- **判定依据**：`case_cli.cmd_exec` 显式写 `detail_path`，`_finish → _emit → O.emit` 又写一份。
+- **未修原因**：同 G1。
+
+### G3 · `measure_context.run_sessions(only_qa=True)` 是死代码
+
+- **现象**：`if only_qa and "qa-skills" not in path: pass` 分支不做任何事。
+- **影响**：读代码的人会以为存在"只统计 QA 项目会话"的过滤逻辑，实际没有。
+- **判定依据**：`tools/measure_context.py:182`。
+- **未修原因**：同 G1（纯清理，无行为变化）。
+
+### G4 · `qa_skill_common/README.md` 的 `report_gen` 行未更新
+
+- **现象**：README 模块表补了 `output.py` / `page_registry.py` / `case_cli.py`，
+  但 `report_gen.py` 那行没提新增的 `conclusions=` 入参。
+- **影响**：模块索引与实现略有偏差；`report_gen.py` 与注册表状态机这类文件
+  **不在 skills 的预算集合中**（`measure_context` 只覆盖 SKILL.md / references /
+  指定必读集），所以预算闸门不会覆盖到这类"索引类文档"的更新遗漏。
+- **判定依据**：原改写用的 `str.replace` 锚点未命中且**没有加断言**，于是静默跳过。
+- **未修原因**：同 G1。**但它暴露的流程问题值得单独记住：改文档也要断言锚点命中。**
+
+### G5 · `ones-create-linked-defect/SKILL.md` 资源列表漏 `qa_case.py`
+
+- **现象**：ones 技能已新增 `scripts/qa_case.py` 入口，但 SKILL 的「资源」清单未列出。
+- **影响**：入口存在却无文档指引；不影响已有流程。
+- **判定依据**：`grep -c qa_case ones-create-linked-defect/SKILL.md` → 0。
+- **未修原因**：同 G1。
+
+### G6 · `features.json` 键归一化口径不一致
+
+- **现象**：`page_registry.host_of()` 会把 host 转小写，`goto_feature` 拼 key 时用
+  `MES_URL.rstrip("/")` **不转小写**。key 形如 `"<base>|<功能名>"`。
+- **影响**：当 `MES_URL` 含大写字母时，注册表写入的 key 与 `goto_feature` 读取的 key
+  不一致 → 直达缓存不命中（退化为走搜索，仅慢，不会错）。
+- **判定依据**：`page_registry.host_of` 与 `bbt_osd_common.goto_feature` 的 key 拼接。
+- **未修原因**：同 G1；实测环境（t-dafu 等）host 全小写，暂不触发。

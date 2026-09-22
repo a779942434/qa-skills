@@ -109,6 +109,16 @@ class TestTwoLevelTrust(unittest.TestCase):
         self.assertTrue(entry["stale"])
         self.assertFalse(R.should_direct_goto(entry))
 
+    def test_write_side_gating_observed_page_is_not_trusted(self):
+        """P1-5 回归：落错页面（首页兜底）只能按仅观测登记，不得写成 verified。"""
+        R.upsert_page(HOST, FEAT, url=HOST + "/home", verified=False, title="首页")
+        entry = R.get_page(HOST, FEAT)
+        self.assertFalse(entry["verified"])
+        self.assertFalse(R.should_direct_goto(entry))
+        # 即便标题一致（首页 vs 首页）也不会被当成"已验证"
+        self.assertEqual(R.check_consistency(entry, title="首页"), "ok")
+        self.assertFalse(R.should_direct_goto(entry))
+
     def test_upsert_clears_stale_flag(self):
         R.upsert_page(HOST, FEAT, url=HOST + "/ok", verified=True)
         R.mark_stale(HOST, FEAT)

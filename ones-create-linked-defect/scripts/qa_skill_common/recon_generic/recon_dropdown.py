@@ -17,7 +17,7 @@ def main():
     ap.add_argument("--url", required=True)
     ap.add_argument("--button", default="新增")
     ap.add_argument("--full", action="store_true", help="不截断（旧行为）")
-    ap.add_argument("--out-dir", default=None, help="截断时完整结构的落盘目录")
+    ap.add_argument("--out-dir", default=None, help="截断时全量落盘目录（不给则 stdout 无 full_path）")
     args = ap.parse_args()
     with sync_playwright() as pw:
         browser = launch_mes_browser(pw)

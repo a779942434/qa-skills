@@ -141,6 +141,85 @@ class TestErrors(unittest.TestCase):
         self.assertLessEqual(len(out), C.MAX_STDOUT_CHARS)
 
 
+class TestNetSignals(unittest.TestCase):
+    """P0-2 回归：曾用 snapshot()（返回 dict）当响应列表，异常被 except 吞掉 -> http 恒为空。"""
+
+    def test_recent_shape_is_mapped(self):
+        class W:
+            def recent(self, n=10):
+                return [{"url": "/api/x", "method": "POST", "status": 200,
+                         "duration_ms": 88, "seq": 1}]
+        rows, err = C._net_of(W())
+        self.assertEqual(err, "")
+        self.assertEqual(rows, [{"url": "/api/x", "method": "POST",
+                                "status": 200, "ms": 88}])
+
+    def test_failure_is_reported_not_swallowed(self):
+        class Bad:
+            def recent(self, n=10):
+                raise RuntimeError("boom")
+        rows, err = C._net_of(Bad())
+        self.assertEqual(rows, [])
+        self.assertIn("RuntimeError", err)          # 禁止静默失败
+
+    def test_legacy_snapshot_dict_does_not_crash(self):
+        """兼容旧形状：snapshot() 返回 dict 时不得抛错，且要上报。"""
+        class Legacy:
+            def snapshot(self):
+                return {"seq": 0, "urls": set()}
+        rows, err = C._net_of(Legacy())
+        self.assertEqual(rows, [])
+
+
+class TestStdoutStep(unittest.TestCase):
+    """两级输出：detail 不进 stdout，error 必须留在 stdout。"""
+
+    def test_success_row_has_no_detail(self):
+        row = C.stdout_step(3, "read", True, 12)
+        self.assertEqual(row, {"i": 3, "action": "read", "ok": True, "ms": 12})
+        self.assertNotIn("detail", row)
+
+    def test_failure_row_keeps_error(self):
+        row = C.stdout_step(3, "read", False, 12, "AssertionError: 未出现文本")
+        self.assertIn("error", row)
+        self.assertFalse(row["ok"])
+
+    def test_batch_stdout_stays_within_budget(self):
+        """40 步紧凑行 + 判据 -> 单行 JSON 必须在 4KB 内（曾经是 55870）。"""
+        steps = [C.stdout_step(i, "read", True, 12) for i in range(40)]
+        payload = {"label": "C07", "status": "pass", "ms": 1840,
+                   "signals": {"toasts": [], "form_errors": [],
+                               "http": [{"url": "/api/x", "status": 200, "ms": 88}],
+                               "data_diff": {}},
+                   "steps": steps, "evidence": [], "next_hint": ""}
+        text = C._emit(payload, kind="exec", label="C07")
+        self.assertLessEqual(len(text), C.MAX_STDOUT_CHARS)
+        self.assertFalse(json.loads(text).get("truncated", False))
+
+
+class TestStateDirResolution(unittest.TestCase):
+    """P1-1 回归：run 的摘要目录必须与 spec 实际写入同源。"""
+
+    def test_prefers_explicit_run_dir(self):
+        with tempfile.TemporaryDirectory() as d:
+            spec = Path(d) / "run_all.py"
+            spec.write_text("# stub", encoding="utf-8")
+            self.assertEqual(C._resolve_state_dir(spec, "/tmp/explicit"), Path("/tmp/explicit"))
+
+    def test_prefers_spec_parent_when_state_exists(self):
+        with tempfile.TemporaryDirectory() as d:
+            spec = Path(d) / "run_all.py"
+            spec.write_text("# stub", encoding="utf-8")
+            (Path(d) / "run_state.json").write_text("{}", encoding="utf-8")
+            self.assertEqual(C._resolve_state_dir(spec), Path(d))
+
+    def test_falls_back_when_nothing_exists(self):
+        with tempfile.TemporaryDirectory() as d:
+            spec = Path(d) / "run_all.py"
+            spec.write_text("# stub", encoding="utf-8")
+            self.assertIsInstance(C._resolve_state_dir(spec), Path)
+
+
 class TestRegistryNavigation(unittest.TestCase):
     """P1-3：命中 verified 才直接 goto，且必须过一致性校验。"""
 
@@ -168,10 +247,11 @@ class TestRegistryNavigation(unittest.TestCase):
                         verified=True, title="月度工序计划", probe_verdict="element-plus")
         calls = []
         page = self._page("月度工序计划")
-        landed, note = C._land(page, self.HOST + "/x", self.FEAT,
-                               lambda pg, u: calls.append(u))
+        landed, note, verified_ok = C._land(page, self.HOST + "/x", self.FEAT,
+                                            lambda pg, u: calls.append(u))
         self.assertEqual(calls, [self.HOST + "/plan/monthly/index"])
         self.assertIn("直接 goto", note)
+        self.assertTrue(verified_ok)                   # P1-5：验证成功才为 True
         self.assertEqual(REG.get_page(self.HOST, self.FEAT)["hits"], 2)  # upsert + record_hit
 
     def test_stale_entry_falls_back_and_downgrades(self):
@@ -181,10 +261,11 @@ class TestRegistryNavigation(unittest.TestCase):
         page = self._page("完全不同的页面")
         with mock.patch("qa_skill_common.bbt_osd_common.goto_feature",
                         return_value=self.HOST + "/plan/new/index") as gf:
-            landed, note = C._land(page, self.HOST + "/x", self.FEAT,
-                                   lambda pg, u: calls.append(u))
+            landed, note, verified_ok = C._land(page, self.HOST + "/x", self.FEAT,
+                                                lambda pg, u: calls.append(u))
         self.assertTrue(gf.called or calls)                # 有回退动作
         self.assertIn("失效", note)
+        self.assertTrue(verified_ok)                       # 搜索命中 -> 算验证成功
         entry = REG.get_page(self.HOST, self.FEAT)
         self.assertFalse(entry["verified"])                # 已降级
         self.assertTrue(entry["stale"])
@@ -196,6 +277,17 @@ class TestRegistryNavigation(unittest.TestCase):
         with mock.patch("qa_skill_common.bbt_osd_common.goto_feature", return_value=None):
             C._land(page, self.HOST + "/x", self.FEAT, lambda pg, u: calls.append(u))
         self.assertNotIn(self.HOST + "/maybe", calls)      # 不会被信任
+
+    def test_fallback_landing_is_not_verified(self):
+        """P1-5：注册表未命中 + 搜索也失败 -> 兜底 goto 不算验证成功。"""
+        calls = []
+        page = self._page("首页")
+        with mock.patch("qa_skill_common.bbt_osd_common.goto_feature", return_value=None):
+            landed, note, verified_ok = C._land(page, self.HOST + "/x", self.FEAT,
+                                                lambda pg, u: calls.append(u))
+        self.assertFalse(verified_ok)
+        self.assertNotEqual(note, "")                      # 必须给出可读原因，不能静默
+        self.assertTrue(calls)                             # 仍执行了兜底跳转
 
     def test_pages_subcommand_renders_registry(self):
         REG.upsert_page(self.HOST, self.FEAT, url=self.HOST + "/a", verified=True)

@@ -139,8 +139,8 @@ def build_parser():
                     help="只在侦察结果里检索该文本，只输出命中项（省 token）")
     ap.add_argument("--json", action="store_true", help="以 JSON 输出完整结构")
     ap.add_argument("--full", action="store_true",
-                    help="不截断（旧行为）；默认输出限长并把完整结构落盘")
-    ap.add_argument("--out-dir", default=None, help="截断时完整结构的落盘目录")
+                    help="不截断（旧行为）；默认输出限长，配合 --out-dir 才落盘全量")
+    ap.add_argument("--out-dir", default=None, help="截断时全量落盘目录（不给则 stdout 无 full_path）")
     ap.add_argument("--max-chars", type=int, default=2000, help="默认输出的字符上限")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--probe", action="store_true", help="组件指纹探针（只读）")
