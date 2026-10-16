@@ -37,6 +37,7 @@ from ones_helpers import (  # noqa: E402
     get_parent_context,
     list_related_tasks,
     append_task_description_images,
+    sanitize_text,
     upload_task_evidences_api,
 )
 
@@ -252,6 +253,10 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="只解析校验不建单")
     ap.add_argument("--skip-evidence", action="store_true", help="跳过证据补传")
     ap.add_argument("--no-inline-evidence", action="store_true", help="只传附件，不把截图内嵌到描述")
+    ap.add_argument("--no-redact", action="store_true",
+                    help="关闭描述净化（默认过滤本地路径/账号密码/租户标注等只应留在本地的信息）")
+    ap.add_argument("--redact-pattern", action="append", default=None,
+                    help="追加净化规则，形如 '正则==替换文本'，可重复（与 profile.redact.patterns 合并）")
     ap.add_argument("--inline-timeout", type=float, default=90, help="描述内嵌图片超时秒数（默认90）")
     args = ap.parse_args()
 
@@ -331,6 +336,20 @@ def main():
         print("字段覆盖表:", json.dumps(overrides, ensure_ascii=False))
 
         # 先完成字段与证据预检，避免“已建单但证据缺失”的半成品。
+        # 描述净化：默认过滤「只应留在本地」的写死信息（本地路径 / 账号密码 / 租户标注），
+        # 规则可经 profile.redact.patterns 或 --redact-pattern 扩展；--no-redact 关闭。
+        redact_patterns = list(((profile or {}).get("redact") or {}).get("patterns") or [])
+        for item in (args.redact_pattern or []):
+            if "==" in item:
+                pat, rep = item.split("==", 1)
+                redact_patterns.append([pat, rep])
+        if not args.no_redact:
+            for b in bugs:
+                b["desc"], hits = sanitize_text(b["desc"], redact_patterns)
+                if hits:
+                    summary = ", ".join(f"{h['pattern'][:28]}×{h['count']}→{h['replacement']}" for h in hits)
+                    print(f"  描述净化 {b['key']}: {summary}")
+
         prepared = []
         for b in bugs:
             fvs = build_defect_fields(

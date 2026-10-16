@@ -120,3 +120,18 @@
 7. 上传确认弹窗的判定必须排除主弹窗，否则提前提交/重复建单。
 8. 评论 @ 必须带 `data-ref-id` + `data-ref-name`。
 9. 状态流转项虽隐藏但已预渲染，点状态框后直接 `el.click()`。
+
+### 任务详情路由（2026-10-16 固化）
+
+- 任务详情路由必须带 `project/component/view` 上下文；简版 `#/team/<team>/task/<uuid>` 只渲染**任务列表页**，
+  描述区/附件区都拿不到（表现为等 `.richtext-input-viewer-wrapper` 超时）。
+- 这些段与项目绑定、**不可写死**：统一用 `ones_helpers.ensure_task_detail_page(page, team, task_uuid)`
+  （从当前页 URL 继承上下文，拿不到立即抛带 URL 的错误，不静默超时）。
+- 受影响的入口：`append_task_description_images()`、`ones_backfill_evidence.py`。
+
+### 描述净化（只应留在本地的信息不外发）
+
+- `ones_submit_defects.py` 提交前默认调 `sanitize_text()`：过滤本地绝对路径（`/Users`、`/home`、`C:\`…）、
+  `账号 xxx`、`密码/token xxx`、「（租户 xx，账号 yy）」环境标注；命中明细打印在提交日志。
+- 扩展规则：`profile.redact.patterns: [[正则, 替换], ...]` 或 `--redact-pattern '正则==替换'`（可重复）；`--no-redact` 关闭。
+- 原则：客户名、实例 URL、本机路径等写死信息**只放 `config/field-mapping.local.yaml`（已 gitignore）与本地产物目录**，公共脚本/模板/references 不放。

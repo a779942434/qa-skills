@@ -673,6 +673,95 @@ def _enter_description_edit(page, viewer, timeout=8.0):
             pass
     return False
 
+# ---------- 任务详情路由（2026-10-16 固化）----------
+
+# ONES 任务详情路由必须带 project/component/view 上下文，形如：
+#   /project/#/team/<team>/project/<pid>/component/<cid>/view/<vid>/task/<uuid>
+# 而 `#/team/<team>/task/<uuid>` 简版路由只会渲染「任务列表页」，看不到任务详情与
+# 描述编辑器（现象：等待 `.richtext-input-viewer-wrapper` 超时）。
+_DETAIL_PREFIX_RE = re.compile(
+    r'(/project/\#?/?team/[^/]+/project/[^/]+/component/[^/]+/view/[^/]+)'
+)
+_DETAIL_PREFIX_RE_PLAIN = re.compile(
+    r'(/project/#/team/[^/]+/project/[^/]+/component/[^/]+/view/[^/]+)'
+)
+
+
+def task_detail_url(page, team_uuid, task_uuid, base=None):
+    """构造「任务详情」URL（带 project/component/view 上下文）。
+
+    project/component/view 段与具体项目绑定、不能写死到脚本里，因此优先从当前页面
+    URL **继承**：调用方只要此前访问过该项目的任意任务详情/列表页，就能拿到上下文。
+    继承不到时回退到简版路由，由调用方在导航后做可见性校验（并给出可操作提示）。
+    """
+    base = (base or resolve_settings()['ones_url']).rstrip('/')
+    cur = getattr(page, 'url', '') or ''
+    m = _DETAIL_PREFIX_RE_PLAIN.search(cur)
+    if m:
+        return f"{base}{m.group(1)}/task/{task_uuid}"
+    return f"{base}/project/#/team/{team_uuid}/task/{task_uuid}"
+
+
+def ensure_task_detail_page(page, team_uuid, task_uuid, timeout=20.0):
+    """确保当前页是任务详情页（能看到描述区）；返回实际使用的 URL。
+
+    先按继承到的详情路由导航，校验描述区出现；否则抛带上下文的错误，
+    避免后续等待 90s 才超时。
+    """
+    url = task_detail_url(page, team_uuid, task_uuid)
+    if task_uuid not in (getattr(page, 'url', '') or ''):
+        page.goto(url, wait_until='domcontentloaded', timeout=60000)
+    wait_app_ready(page, timeout=min(float(timeout), 20))
+    try:
+        page.wait_for_selector(
+            '.richtext-editor-viewer:visible, .richtext-input-viewer-wrapper:visible',
+            timeout=int(min(float(timeout), 20) * 1000),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            '任务详情页未加载（未渲染出描述区）。ONES 详情路由需要 '
+            'project/component/view 上下文，当前 URL: '
+            f'{(getattr(page, "url", "") or "")[:160]}；'
+            '请先打开该项目任意任务详情页（使 URL 含该上下文）后重试。'
+        ) from exc
+    return url
+
+
+# ---------- 描述净化（2026-10-16 固化）----------
+
+# 默认过滤「只应留在本地」的写死信息，避免随缺陷描述外发。
+# 客户名/项目名等如需过滤，用 profile 的 redact.patterns 追加（不写进公共脚本）。
+REDACT_RULES = (
+    (re.compile(r'(?:/Users|/home|/private|/var|/tmp|/Volumes)/[^\s，,；;）)】\]]+'), '<本地路径>'),
+    (re.compile(r'[A-Za-z]:\\[^\s，,；;）)】\]]+'), '<本地路径>'),
+    (re.compile(r'(账号|帐号)\s*[:：]?\s*[A-Za-z0-9_.@-]+'), r'\1 <已隐去>'),
+    (re.compile(r'(密码|口令|token|Token|TOKEN)\s*[:：]?\s*\S+'), r'\1 <已隐去>'),
+    (re.compile(r'[（(]\s*租户[^）)]*[）)]'), ''),
+)
+
+
+def sanitize_text(text, patterns=None):
+    """净化缺陷描述：去掉本地路径、账号密码、租户标注等「只应在本地」的信息。
+
+    patterns: 追加规则列表，元素为 [正则, 替换文本]（通常来自 profile.redact.patterns）。
+    返回 (净化后文本, 命中明细)。命中明细用于提交日志留痕，便于用户核对被过滤了什么。
+    """
+    out = text or ''
+    hits = []
+    rules = list(REDACT_RULES)
+    for item in (patterns or []):
+        try:
+            pat, rep = item[0], item[1]
+            rules.append((re.compile(pat), rep))
+        except Exception:
+            continue
+    for rx, rep in rules:
+        out, n = rx.subn(rep, out)
+        if n:
+            hits.append({'pattern': rx.pattern[:70], 'count': int(n), 'replacement': rep})
+    return out, hits
+
+
 def append_task_description_images(page, team_uuid, task_uuid, image_paths,
                                    timeout=90.0, verify_loaded=True):
     """把截图以内嵌图片形式追加到 ONES 工作项富文本描述并保存。
@@ -697,11 +786,7 @@ def append_task_description_images(page, team_uuid, task_uuid, image_paths,
         result['verified'] = True
         return result
 
-    base = resolve_settings()['ones_url'].rstrip('/')
-    task_url = f"{base}/project/#/team/{team_uuid}/task/{task_uuid}"
-    if task_uuid not in (page.url or '') or '/task/' not in (page.url or ''):
-        page.goto(task_url, wait_until='domcontentloaded', timeout=60000)
-    wait_app_ready(page, timeout=min(timeout, 20))
+    ensure_task_detail_page(page, team_uuid, task_uuid, timeout=min(timeout, 20))
     page.wait_for_timeout(800)
 
     info = get_task_info(page, team_uuid, task_uuid) or {}

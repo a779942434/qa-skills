@@ -100,13 +100,19 @@ description: >-
 5. **主工单流转**：缺陷单全部关闭后，把主工单流转到目标状态（如「集成测试通过待验收」），路径见 `references/ones-ui.md`。
 6. **汇报**：完成后向用户说明每个单子的处理结果与当前状态。
 
-## 关键坑（最高频 3 条）
+## 关键坑（最高频 5 条）
 
 - 含中文的脚本必须写成 `.py` 文件（UTF-8）再执行，避免内联 heredoc 被 shell 转码乱码。
 - 页面有多个 CKEditor：主工单描述 `editor1` **禁止操作**；只操作提缺陷弹窗 `editor2`（`[role=dialog]` 内含「选择关联关系」的那个）。
 - 提交成功不能只看 toast：必须断言**弹窗关闭 + 关联内容数量 +1 + 标题出现**；同标题重复要告警去重。
+- **任务详情路由**：必须带 `project/component/view` 上下文（简版 `#/team/<team>/task/<uuid>` 会落到任务列表页，
+  导致描述内嵌图片 / 附件回填空等超时）；统一用 `ones_helpers.ensure_task_detail_page()`，上下文从当前页 URL 继承，
+  **不要把具体项目的 project/component/view 写死进脚本**。
+- **提交前默认净化描述**：`sanitize_text()` 过滤本机绝对路径、`账号 xxx`、`密码/token`、「（租户 xx，账号 yy）」等
+  只应留在本地的信息，命中明细打印在日志；可用 `profile.redact.patterns` / `--redact-pattern` 扩展、`--no-redact` 关闭。
+  **客户名、实例 URL、本机路径等写死内容只放 `config/field-mapping.local.yaml`（已 gitignore）与本地产物目录，公共文件一律不放。**
 
-> 其余 9 条（弹窗定位、字段同名、证据错配、上传确认弹窗、下拉 teleport、@ 提及格式、
+> 其余 11 条（弹窗定位、字段同名、证据错配、上传确认弹窗、下拉 teleport、@ 提及格式、
 > 状态流转、附件核验口径等）见 `references/ones-ui.md` 的「易踩坑清单」。
 
 ## 资源
@@ -114,5 +120,6 @@ description: >-
 - 脚本：`check_env.py`（自检）、`ones_bootstrap.py`（一键引导）、`ones_edge_server.py` / `edge_session_setup.py`
   （常驻浏览器/登录态）、`ones_submit_defects.py`（批量提缺陷 CLI）、`ones_project_setup.py`（新项目接入）、
   `ones_backfill_evidence.py`（附件+描述内嵌回填）、`ones_config.py`（配置）、`ones_helpers.py`（CDP + ONES 接口/弹窗封装）、`qa_case.py`（单用例/批次闭环，回归复跑）。
-- 配置：`config/settings.yaml`（环境/浏览器）、`config/field-mapping.yaml`（字段映射与证据目录）。
+- 配置：`config/settings.yaml`（环境/浏览器）、`config/field-mapping.yaml`（通用模板，无客户数据）；
+  真实客户配置放 `config/field-mapping.local.yaml`（已 gitignore，不入库）。
 - 文档：`references/ones-ui.md`（选择器速查、字段映射、编辑器/上传、状态流转、易踩坑清单）。

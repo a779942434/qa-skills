@@ -13,14 +13,15 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from ones_helpers import connect, disconnect, resolve_settings, append_task_description_images
+from ones_helpers import (connect, disconnect, resolve_settings,
+                           append_task_description_images, ensure_task_detail_page)
 from qa_skill_common.bbt_helpers import wait_app_ready
 
 
 def attach_files(page, team_uuid, defect_uuid, files):
-    base = resolve_settings()["ones_url"].rstrip("/")
-    page.goto(f"{base}/project/#/team/{team_uuid}/task/{defect_uuid}", wait_until="domcontentloaded", timeout=60000)
-    wait_app_ready(page)                                   # 替代固定 7s
+    # 任务详情必须带 project/component/view 上下文，统一走 ensure_task_detail_page
+    # （简版 `#/team/<team>/task/<uuid>` 会落到任务列表页，附件/描述区都拿不到）
+    ensure_task_detail_page(page, team_uuid, defect_uuid, timeout=20)
     page.evaluate(
         """() => {
             let target = null;
