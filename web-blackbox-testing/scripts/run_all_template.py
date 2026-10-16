@@ -41,6 +41,8 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from api_wait import ApiWatcher  # noqa: E402
+from qa_skill_common.qa_action import control as qa_control  # noqa: E402,F401  # 控件能力行为判定
+from qa_skill_common.qa_action import verdict as qa_verdict  # noqa: E402
 from qa_skill_common import paths as qa_paths  # noqa: E402
 from qa_skill_common.phase_runner import (  # noqa: E402
     BLOCK, FAIL, PASS, CaseGroupSpec, CaseSpec, PhaseRunner, PhaseSpec, RunContext, RunState,
@@ -138,21 +140,22 @@ def run_case(page, watcher, case):
         # page.get_by_role("button", name="查询").click()
         pass
 
-    # 动作与接口响应绑定：接口返回即继续，timeout 只作异常上限。
-    new = watcher.wait_action(
+    # 判定统一走 qa_action.verdict —— 四源交叉（新接口 + toast + 内联错误 + 数据变化），
+    # 不自己拼单信号判据；控件能力（多选 / 只读 / 日期）用 qa_action.control 行为判定。
+    res = qa_verdict(
+        page,
         action,
         keyword=case.get("keyword"),
-        url_contains=case.get("keyword"),
+        expect=case.get("expect"),  # 可选：success / blocked / silent / http_error
         timeout=60,
     )
-    if not new:
-        ev = snap(page, f"{case['id']}_no_response", CONFIG["out_dir"], feature=CONFIG["feature"])
-        return "失败", ev, "匹配业务接口未返回或超时"
-
     page.wait_for_timeout(500)
-    ok = True  # 【按任务改】替换为真实断言；优先数据变化，toast 仅辅助
     ev = snap(page, case["id"], CONFIG["out_dir"], feature=CONFIG["feature"])
-    return ("通过" if ok else "失败"), ev, ""
+    ok = bool(res.get("match", res.get("ok")))
+    sig = res.get("signals") or {}
+    note = "" if ok else "reason=%s toasts=%s errors=%s" % (
+        res.get("reason"), sig.get("toasts"), sig.get("form_errors"))
+    return ("通过" if ok else "失败"), ev, note[:300]
 
 
 def _first_url() -> str:

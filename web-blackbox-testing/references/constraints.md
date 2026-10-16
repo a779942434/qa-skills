@@ -22,5 +22,5 @@
 2. 拿到 URL、需求文档路径、测试数据范围；需求缺失先向用户要。**执行前做数据勘察**：列出每条用例前置条件所需数据是否现成，不足标「数据受限未覆盖」或请求造数；**需求未明确项前置确认**：把「报错文案/停留含义/记忆口径/校验提示」等未明确项先抛给用户/产品确认，避免测完攒一堆待确认。
 3. **沙箱网络受限时（DNS 解析失败 / Operation not permitted），访问目标站点的浏览器/网络命令统一用非沙箱（require_escalated）执行，不要在沙箱内先试一遍再升级。**
 4. **浏览器定式**：被测 MES 站点统一用独立 Chromium + Keycloak 登录（`bbt_osd_common.login_ousida`）；ONES 常驻 Edge（CDP 9334）只用于 ONES 相关操作，不混用。
-5. **登录/导航零重复**：新页面直接用 `scripts/recon-generic/recon_page.py --url <URL>`（内置登录+导航+侦察），不要每个脚本重写；页面结构固化到 references 后直接引用。**判定走多信号**：操作结果用 `bbt_helpers.judge_action` / `api_wait.confirm_action`（toast+内联错误+新接口+数据变化四源交叉），不只看单层信号。
+5. **登录/导航零重复**：新页面直接用 `scripts/recon-generic/recon_page.py --url <URL>`（内置登录+导航+侦察），不要每个脚本重写；页面结构固化到 references 后直接引用。**判定走多信号（统一入口）**：操作结果用 `qa_action.verdict`（内部四源交叉：toast+内联错误+新接口+数据变化），控件能力（多选/只读/日期）用 `qa_action.control` **行为判定**；不自己拼单层信号判据。
 6. 数据策略遵循必守 C（结束闸门）：测试环境保留造数（命名带测试标识便于追溯），仅在确需清理时清理并留痕；记录本轮产生数据。

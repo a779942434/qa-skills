@@ -12,6 +12,7 @@
 | `paths.py` | **统一产物路径解析**：缺陷清单/报告/用例/知识库都相对「产物根 workspace」，保证 web 产出、ones 找得到 |
 | `bbt_helpers.py` | 浏览器连接、错误监听、条件等待、表格读取、截图、数据基线、页面结构侦察与防超时 helper |
 | `api_wait.py` | 接口观测等待：用「等业务接口返回」替代固定 sleep / 立即读 DOM |
+| `qa_action.py` | **判定入口**：`verdict()` 四源判定（新接口 + toast + 内联错误 + 数据变化）、`control()` 控件能力**行为判定**（多选/只读/日期，禁止靠 DOM class 猜）、`emit_verdict()` 限长输出 —— 下结论统一走这里 |
 | `bbt_osd_common.py` | MES 登录、导航、表单/表格辅助与幂等造数函数 |
 | `bbt_osd_setup.py` | 产品、工艺路线、工序与 BOM 的一次性造数入口 |
 | `phase_runner.py` | 分阶段执行、弹窗 micro-case 批处理、用例检查点、数据台账、恢复执行与失败分级 |

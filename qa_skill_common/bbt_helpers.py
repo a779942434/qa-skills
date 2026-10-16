@@ -170,7 +170,75 @@ def connect(cdp_url=None, new_page=False, url_contains=None, title_contains=None
         page = ctx.new_page()
     else:
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
+    _register_own_page(page)
+    _warn_foreign_pages(ctx, keep=page)
     return pw, browser, ctx, page
+
+
+# ---------- 0b. 会话隔离：自有页面登记 / 禁止误关他人页面 ----------
+# 背景：共享 CDP（默认 9222）上可能同时有其他会话/任务的页面。
+#       脚本里常见的 `for p in ctx.pages: p.close()` 会关掉别人的页面。
+#       这里把「本会话创建/复用的页面」登记下来，并把「关闭非自有页面」变成
+#       需显式确认的动作（默认拒绝），从代码层拦住这类误操作。
+_OWN_PAGE_IDS = set()
+
+
+def _register_own_page(page):
+    """登记本会话拥有的页面（connect / new_page 时调用）。"""
+    try:
+        _OWN_PAGE_IDS.add(id(page))
+    except Exception:
+        pass
+
+
+def own_pages():
+    """返回本会话登记的页面 id 列表（用于调试/断言）。"""
+    return sorted(_OWN_PAGE_IDS)
+
+
+def _warn_foreign_pages(ctx, keep=None):
+    """检测 CDP 上是否存在非本会话页面，存在则给出一次明确提示（不关闭）。"""
+    try:
+        foreign = [p for p in list(ctx.pages) if p is not keep and id(p) not in _OWN_PAGE_IDS]
+    except Exception:
+        return
+    if foreign:
+        # 走 stderr：stdout 必须留给 qa_case 的单行 JSON 契约
+        print(
+            "[bbt] 警告：该 CDP 上检测到 %d 个非本会话页面（可能是其他任务/会话在用同一浏览器）。"
+            "禁止关闭这些页面；确需新建请用 new_page=True。" % len(foreign),
+            file=sys.stderr,
+        )
+
+
+def close_other_pages(ctx, keep=None, force=False):
+    """关闭 ctx 中的「非自有」页面。
+
+    默认**拒绝执行**（抛 RuntimeError）：共享浏览器上关闭他人页面会干扰其他会话。
+    确需清理时显式传 force=True，并自行确认这些页面属于本任务。
+    返回被关闭页面的 URL 列表。
+    """
+    if not force:
+        raise RuntimeError(
+            "close_other_pages 已拦截：默认禁止关闭非本会话页面（共享 CDP 上可能干扰他人）。"
+            "如确属本任务遗留页面，请显式调用 close_other_pages(ctx, force=True)。"
+        )
+    closed = []
+    for p in list(ctx.pages):
+        if p is keep or id(p) in _OWN_PAGE_IDS:
+            continue
+        try:
+            url = ""
+            try:
+                url = p.url
+            except Exception:
+                pass
+            p.close()
+            closed.append(url)
+        except Exception:
+            pass
+    return closed
+
 
 def disconnect(pw):
     try:
@@ -1595,6 +1663,7 @@ if __name__ == "__main__":
     print("  table_columns / read_table_rows / snap / record_baseline / assert_new_target")
     print("  find_page / parse_import_template / recon_page_structure / recon_once")
     print("  防误报&隔离: read_feedback / active_dialog / read_dialog / judge_action")
+    print("  会话隔离: own_pages / close_other_pages（默认拒关他人页面）")
     print("  级联&禁用: detect_cascade / select_cascade / click_or_observe / reset_to")
     print("  无视觉/盲操作(2026-09-07): click_visible_text / open_split_add_dropdown / dump_visible_dialogs")
     print("  防超时/作用域(2026-09-14): configure_page_timeouts / active_pane / dialog_by_title / safe_click")

@@ -12,3 +12,4 @@ node_modules/
 /.cache/
 /.playwright-mcp/
 /sites/
+/bug-reports
