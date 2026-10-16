@@ -40,6 +40,12 @@ def gen_report(meta: dict, cases: list, problems: list, uncovered: list,
         f"未覆盖 {sum(1 for c in cases if c.get('结果')=='未覆盖')}，"
         f"环境观察 {sum(1 for c in cases if c.get('结果')=='环境观察')}",
     ]
+    jg = meta.get("判定动作") or {}
+    if jg:
+        # 判定动作统计：total=0 表示本次没走 qa_action 统一入口（可观测的红旗）
+        hint = "" if jg.get("total") else "（**未走 qa_action 统一入口，需核查是否用了弱判据**）"
+        lines.append("- 判定动作：verdict {} 次 / control {} 次{}".format(
+            jg.get("verdict", 0), jg.get("control", 0), hint))
     if conclusions:
         lines += ["", "### 业务结论"]
         lines += ["- {}".format(str(c)) for c in conclusions]

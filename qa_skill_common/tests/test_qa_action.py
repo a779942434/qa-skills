@@ -80,3 +80,48 @@ class EmitVerdictTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class JudgementLogTest(unittest.TestCase):
+    """B 项埋点：跨进程可观测（qa_case 以子进程跑用例，故走文件）。"""
+
+    def test_record_and_summarize(self):
+        import json
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            log = os.path.join(d, "judgements.jsonl")
+            os.environ["QA_JUDGE_LOG"] = log
+            try:
+                A._record("verdict", {"ok": True, "reason": "success"})
+                A._record("control", {"ok": False, "expect": "multi", "actual": "single"})
+            finally:
+                os.environ.pop("QA_JUDGE_LOG", None)
+            jg = A.summarize(log)
+            self.assertEqual(jg["total"], 2)
+            self.assertEqual(jg["verdict"], 1)
+            self.assertEqual(jg["control"], 1)
+            self.assertEqual(jg["failed"], 1, "control 判失败也要计数")
+            self.assertEqual(json.loads(open(log, encoding="utf-8").readline())["kind"], "verdict")
+
+    def test_no_env_is_silent(self):
+        import os
+        os.environ.pop("QA_JUDGE_LOG", None)
+        A._record("verdict", {"ok": True})  # 不得抛异常
+
+    def test_summarize_missing_file_is_zero(self):
+        jg = A.summarize("/nonexistent/judgements.jsonl")
+        self.assertEqual(jg["total"], 0)
+
+    def test_control_writes_log(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            log = os.path.join(d, "j.jsonl")
+            os.environ["QA_JUDGE_LOG"] = log
+            try:
+                with mock.patch.object(H, "select_is_multiple", return_value=True):
+                    A.control(None, object(), "multi")
+            finally:
+                os.environ.pop("QA_JUDGE_LOG", None)
+            self.assertEqual(A.summarize(log)["control"], 1)

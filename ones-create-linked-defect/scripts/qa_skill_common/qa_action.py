@@ -10,12 +10,60 @@
 """
 from __future__ import annotations
 
+import json
+import os
+import time
+
 from . import output as _output
 from . import bbt_helpers as _bbt  # 以模块属性调用：便于替换/测试，也避免绑定死引用
 
 # control() 支持的 expect（multi/single 为行为判定，其余委托 assert_control_type）
 CONTROL_EXPECTS = ("multi", "single", "input", "select", "date", "readonly",
                    "cascader", "checkbox", "textarea")
+
+# 判定埋点：跨进程可观测（用例由 qa_case 以子进程执行，故走文件而非内存计数）。
+# 未设置 QA_JUDGE_LOG 时静默跳过；任何异常都不得影响判定本身。
+def _record(kind, payload):
+    path = os.environ.get("QA_JUDGE_LOG")
+    if not path:
+        return
+    try:
+        rec = {"ts": round(time.time(), 3), "kind": kind}
+        for k in ("ok", "reason", "expect", "actual"):
+            if k in payload:
+                rec[k] = payload[k]
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def summarize(path):
+    """统计判定埋点文件，供 qa_case run/report 输出使用。
+
+    返回 ``{"total": n, "verdict": a, "control": b, "failed": c, "path": str}``；
+    文件不存在/为空时 total=0（调用方据此提示"是否绕过了判定入口"）。
+    """
+    out = {"total": 0, "verdict": 0, "control": 0, "failed": 0, "path": str(path)}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                out["total"] += 1
+                k = rec.get("kind")
+                if k in ("verdict", "control"):
+                    out[k] += 1
+                if rec.get("ok") is False:
+                    out["failed"] += 1
+    except Exception:
+        pass
+    return out
 
 
 def control(page, item, expect, *, values=("A", "B"), timeout=3):
@@ -40,10 +88,13 @@ def control(page, item, expect, *, values=("A", "B"), timeout=3):
             return {"ok": False, "expect": exp, "actual": "unknown",
                     "reason": "probe_failed: %s" % exc}
         actual = "multi" if is_multi else "single"
-        return {"ok": actual == exp, "expect": exp, "actual": actual,
-                "reason": "behaviour_probe", "probed_values": vals}
+        res = {"ok": actual == exp, "expect": exp, "actual": actual,
+               "reason": "behaviour_probe", "probed_values": vals}
+        _record("control", res)
+        return res
     res = dict(_bbt.assert_control_type(item, expect, timeout=timeout) or {})
     res.setdefault("expect", exp)
+    _record("control", res)
     return res
 
 
@@ -59,6 +110,7 @@ def verdict(page, action, *, expect=None, api_watcher=None, data_diff=None, keyw
     if expect:
         res["expect"] = expect
         res["match"] = (res.get("reason") == expect)
+    _record("verdict", res)
     return res
 
 

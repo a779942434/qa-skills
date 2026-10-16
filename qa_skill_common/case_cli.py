@@ -448,6 +448,9 @@ def cmd_run(args):
     # 让子进程写进我们将要读的目录（不覆盖用户显式设置的 RUN_STATE_DIR）
     if not env.get("RUN_STATE_DIR"):
         env["RUN_STATE_DIR"] = str(run_dir)
+    # 判定埋点：跨进程可观测，供 run/report 统计「是否走了 qa_action 统一入口」
+    if not env.get("QA_JUDGE_LOG"):
+        env["QA_JUDGE_LOG"] = str(run_dir / "judgements.jsonl")
     t0 = time.time()
     try:
         proc = subprocess.run(cmd, cwd=str(spec.parent), env=env,
@@ -465,6 +468,16 @@ def cmd_run(args):
         "tail": tail,
         "next_hint": "" if rc == 0 else "看 tail 与检查点摘要，优先 --resume 重跑失败项",
     }
+    try:
+        from .qa_action import summarize as _summ
+        jg = _summ(env.get("QA_JUDGE_LOG") or (run_dir / "judgements.jsonl"))
+        payload["judgements"] = {"total": jg["total"], "verdict": jg["verdict"],
+                                 "control": jg["control"], "failed": jg["failed"]}
+        if not jg["total"]:
+            payload["next_hint"] = ("未检测到判定动作（judgements.total=0）——是否绕过了 "
+                                    "qa_action 统一入口？判定类动作应走 qa_action.verdict/control")
+    except Exception:
+        pass
     return _finish(payload, kind="run", run_dir=run_dir, label=args.phase or "run", code=0 if rc == 0 else 1)
 
 
@@ -480,6 +493,11 @@ def cmd_report(args):
         cases = [c for c in cases if c.get("id") == args.case]
     meta = dict(conclusions.get("meta") or {})
     meta.setdefault("功能", state.feature or "")
+    try:
+        from .qa_action import summarize as _summ
+        meta["判定动作"] = _summ(run_dir / "judgements.jsonl")
+    except Exception:
+        pass
     text = gen_report(meta, cases,
                       conclusions.get("问题") or [],
                       conclusions.get("未覆盖") or [],
@@ -489,9 +507,12 @@ def cmd_report(args):
         run_dir / "test-reports" / "{}_测试报告.md".format(state.feature or "测试"))
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text, encoding="utf-8")
+    jg = meta.get("判定动作") or {}
     payload = {"report": str(out), "cases": len(cases),
                "conclusions": len(conclusions.get("结论") or []),
-               "next_hint": ""}
+               "judgements": {"total": jg.get("total", 0), "verdict": jg.get("verdict", 0),
+                              "control": jg.get("control", 0)},
+               "next_hint": "" if jg.get("total") else "judgements.total=0：本次未走 qa_action 统一判定入口"}
     return _finish(payload, kind="report", run_dir=run_dir, label="report", code=0)
 
 
