@@ -47,10 +47,13 @@ CACHE_PRICE = 0.1
 # 超预算时的正确顺序：① 优化表达（去重复、去已在 baseline 详载的解释性文字）
 # ② 确属必需则上调 BUDGETS 并在提交信息里写明理由 ③ **禁止**为过闸删除红线、
 # 停顿边界、结束闸门等硬约束。
+# 2026-10-16 预算重设：修复「用例生成遗漏」（#205600 实测差集 34 项）后，
+# 新增 references/triggers.md（逐句纳管扫描清单，需求点化后必读）并加厚三级核销，
+# 三个常规口径实测值上升，按既有约定「阈值 = 实测值 ÷ 0.92」同步重设。
 BUDGETS = {
-    "必读·标准功能测": 13100,
-    "常见·生成+执行": 23400,
-    "含提缺陷·+ones": 36200,
+    "必读·标准功能测": 13700,
+    "常见·生成+执行": 26600,
+    "含提缺陷·+ones": 39400,
 }
 SINGLE_FILE_MAX = 7000          # 单个 SKILL.md
 PROMPT_TEMPLATE_MAX = 900       # prompt-template.md
@@ -85,6 +88,7 @@ SETS = {
         "generate-manufacturing-test-cases/SKILL.md",
         "generate-manufacturing-test-cases/references/template.md",
         "generate-manufacturing-test-cases/references/method.md",
+        "generate-manufacturing-test-cases/references/triggers.md",
         "web-blackbox-testing/references/playwright-strategy.md",
     ],
     # 含提缺陷：再加 ones 链路
@@ -93,6 +97,7 @@ SETS = {
         "generate-manufacturing-test-cases/SKILL.md",
         "generate-manufacturing-test-cases/references/template.md",
         "generate-manufacturing-test-cases/references/method.md",
+        "generate-manufacturing-test-cases/references/triggers.md",
         "web-blackbox-testing/references/playwright-strategy.md",
         "ones-create-linked-defect/SKILL.md",
         "ones-create-linked-defect/references/ones-ui.md",
