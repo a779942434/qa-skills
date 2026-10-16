@@ -55,7 +55,8 @@ BUDGETS = {
     "常见·生成+执行": 26600,
     "含提缺陷·+ones": 39400,
 }
-SINGLE_FILE_MAX = 7000          # 单个 SKILL.md
+SINGLE_FILE_MAX = 7700          # 单个 SKILL.md
+                                # 2026-10-16 由 7000 上调：web-blackbox 增红线 9「用例必须走生成技能」，实测 7053，按实测÷0.92 重设（不靠削内容过闸）
 PROMPT_TEMPLATE_MAX = 900       # prompt-template.md
 REFERENCE_MAX = 7500            # 单个 reference .md（防"把 SKILL 内容搬进 reference"式反弹）
 DESCRIPTIONS_MAX = 1100         # 常驻 description 合计（每个会话都在）
