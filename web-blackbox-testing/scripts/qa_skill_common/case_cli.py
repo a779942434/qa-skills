@@ -32,6 +32,10 @@ from pathlib import Path
 
 from . import output as O
 from . import page_registry as REG
+from . import coverage as coverage_mod
+from . import metrics as metrics_mod
+from . import oracle
+from . import run_package
 from .phase_runner import RunState
 
 # stdout 硬上限（4 KiB）。依据：单次工具结果控制在 ~600–1000 tokens 量级，
@@ -199,6 +203,136 @@ def _run_step(page, watcher, step, i, out_dir, label, feature):
 
 # ---------------------------------------------------------------- 子命令
 
+def cmd_init(args):
+    """初始化标准运行包；不联网，不覆盖已有文件（除非 --force）。"""
+    run_dir = Path(args.run_dir).expanduser()
+    base_url = args.base_url or os.environ.get("MES_URL", "")
+    environment = run_package.environment_snapshot(
+        base_url,
+        tenant_alias=args.tenant or "",
+        role=args.role or "",
+        location_org=args.location or "",
+        config_fingerprint=args.config_fingerprint or "",
+        browser_profile=args.browser_profile or "",
+        app_version=args.app_version or "",
+    )
+    try:
+        paths = run_package.init_run_package(
+            run_dir, args.feature, mode=args.mode,
+            requirements=args.requirement or [], force=args.force,
+            run_id=args.run_id or "", environment=environment,
+        )
+        state = RunState.load_or_create(run_dir, run_id=args.run_id or "", feature=args.feature)
+        state.save()
+    except FileExistsError as exc:
+        return _err(str(exc), next_hint="确认要覆盖时加 --force", code=1)
+    payload = {
+        "status": "initialized",
+        "run_dir": str(run_dir),
+        "mode": args.mode,
+        "requirements": list(args.requirement or []),
+        "files": paths,
+    }
+    return _finish(payload, kind="init", run_dir=run_dir, label="init", code=0)
+
+
+def cmd_audit(args):
+    """审计标准运行包；strict 时质量缺口返回 1。"""
+    run_dir = Path(args.run_dir).expanduser()
+    audit = run_package.audit_run_package(run_dir, strict=args.strict)
+    payload = {
+        "ok": audit["ok"],
+        "structure_ok": audit.get("structure_ok", True),
+        "strict": audit["strict"],
+        "errors": audit["errors"],
+        "warnings": audit["warnings"],
+        "summary": audit["summary"],
+    }
+    code = 0 if audit["ok"] else (2 if not audit.get("structure_ok", True) else 1)
+    return _finish(payload, kind="audit", run_dir=run_dir, label="audit", code=code)
+
+
+def cmd_metrics(args):
+    """聚合运行包指标，默认输出紧凑 JSON。"""
+    root = Path(args.root).expanduser()
+    result = metrics_mod.collect_metrics(root, since=args.since)
+    payload = {
+        "schema_version": result["schema_version"],
+        "root": result["root"],
+        "since": result["since"],
+        "summary": result["summary"],
+        "runs": result["runs"],
+    }
+    return _finish(payload, kind="metrics", run_dir=root, label="metrics", code=0)
+
+
+def _replay_path(run_dir: Path, raw: str) -> Path:
+    p = Path(raw).expanduser()
+    return p if p.is_absolute() else run_dir / p
+
+
+def cmd_replay(args):
+    """执行缺陷记录中的最小回放脚本，写入证据并更新复现台账。"""
+    run_dir = Path(args.run_dir).expanduser()
+    try:
+        defect = run_package.find_defect(run_dir, args.defect)
+    except KeyError as exc:
+        return _err(str(exc), next_hint="检查 defects.json 中的缺陷编号", code=1)
+    replay = defect.get("replay") or {}
+    script = replay.get("script")
+    if not script:
+        return _err("该缺陷没有 replay.script，不能自动回放", next_hint="先补最小复现脚本", code=1)
+    script_path = _replay_path(run_dir, script)
+    if not script_path.exists():
+        return _err(f"回放脚本不存在: {script_path}", code=1)
+    cmd = [sys.executable, str(script_path)] + [str(x) for x in (replay.get("args") or [])]
+    timeout = int(replay.get("timeout") or 300)
+    expected = int(replay.get("expect_exit_code") or 0)
+    t0 = time.time()
+    try:
+        proc = subprocess.run(cmd, cwd=str(run_dir), capture_output=True, text=True, timeout=timeout)
+        rc, out, err = proc.returncode, proc.stdout or "", proc.stderr or ""
+    except subprocess.TimeoutExpired:
+        rc, out, err = 124, "", "回放超时"
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    ev_path = evidence_dir / f"replay_{defect.get('id', 'defect')}_{int(time.time())}.json"
+    ev_path.write_text(json.dumps({
+        "defect_id": defect.get("id"),
+        "command": cmd,
+        "exit_code": rc,
+        "expected_exit_code": expected,
+        "stdout": out[-4000:],
+        "stderr": err[-4000:],
+        "ms": int((time.time() - t0) * 1000),
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    ev = run_package.add_evidence(
+        run_dir, ev_path, defect_id=defect.get("id", ""), source="replay",
+        reproduction={"attempts": 1, "successes": 1 if rc == expected else 0,
+                      "deterministic_api": bool(replay.get("deterministic_api"))},
+    )
+    repro = dict(defect.get("reproducibility") or {})
+    attempts = int(repro.get("attempts") or 0) + 1
+    successes = int(repro.get("successes") or 0) + (1 if rc == expected else 0)
+    repro.update({"attempts": attempts, "successes": successes,
+                  "deterministic_api": bool(repro.get("deterministic_api") or replay.get("deterministic_api"))})
+    run_package.update_defect(run_dir, defect.get("id", ""), {
+        "reproducibility": repro,
+        "evidence_ids": list(dict.fromkeys((defect.get("evidence_ids") or []) + [ev["id"]])),
+    })
+    payload = {
+        "status": "pass" if rc == expected else "fail",
+        "defect": defect.get("id"),
+        "exit_code": rc,
+        "expected_exit_code": expected,
+        "evidence_id": ev["id"],
+        "evidence": str(ev_path),
+        "reproducibility": repro,
+    }
+    return _finish(payload, kind="replay", run_dir=run_dir, label="replay",
+                   code=0 if rc == expected else 1)
+
+
 def cmd_exec(args):
     from playwright.sync_api import sync_playwright
 
@@ -226,6 +360,7 @@ def cmd_exec(args):
     out_dir = run_dir / "evidence"
     case_out = run_dir / "cases"
     case_out.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("QA_JUDGE_LOG", str(run_dir / "judgements.jsonl"))
 
     started = time.time()
     results, stdout_steps, evidence = [], [], []
@@ -295,6 +430,11 @@ def cmd_exec(args):
             except Exception:
                 pass
 
+    for evidence_path in evidence:
+        try:
+            run_package.add_evidence(run_dir, evidence_path, case_id=label, source="ui")
+        except Exception:
+            pass
     elapsed = int((time.time() - started) * 1000)
     signals = {"toasts": toasts, "form_errors": form_errors,
                "http": http, "data_diff": {}}
@@ -459,6 +599,18 @@ def cmd_run(args):
     except subprocess.TimeoutExpired:
         rc, tail = 124, "spec 超时（{}s）".format(args.timeout)
     state = RunState.load_or_create(run_dir, run_id=args.run_id or "")
+    try:
+        if not (run_dir / run_package.MANIFEST).exists():
+            run_package.init_run_package(
+                run_dir, state.feature or spec.stem, mode="standard",
+                run_id=state.run_id or "",
+                environment=run_package.environment_snapshot(os.environ.get("MES_URL", "")),
+            )
+        run_package.update_manifest(
+            run_dir, tooling={"qa_case": True, "phase_runner": True},
+        )
+    except Exception:
+        pass
     s = state.summary()
     payload = {
         "spec": spec.name, "exit_code": rc, "ms": int((time.time() - t0) * 1000),
@@ -468,6 +620,15 @@ def cmd_run(args):
         "tail": tail,
         "next_hint": "" if rc == 0 else "看 tail 与检查点摘要，优先 --resume 重跑失败项",
     }
+    try:
+        audit = run_package.audit_run_package(run_dir, strict=False)
+        payload["audit"] = {
+            "ok": audit["ok"],
+            "errors": audit["errors"][:5],
+            "warnings": audit["warnings"][:5],
+        }
+    except Exception:
+        pass
     try:
         from .qa_action import summarize as _summ
         jg = _summ(env.get("QA_JUDGE_LOG") or (run_dir / "judgements.jsonl"))
@@ -493,16 +654,34 @@ def cmd_report(args):
         cases = [c for c in cases if c.get("id") == args.case]
     meta = dict(conclusions.get("meta") or {})
     meta.setdefault("功能", state.feature or "")
+    pkg = run_package.load_package(run_dir)
+    cov = coverage_mod.audit_coverage(pkg["contract"], pkg["coverage"], state, strict=False)
+    evidence_items = (pkg.get("evidence") or {}).get("items") or []
+    for case in cases:
+        if not case.get("证据"):
+            linked = [str(e.get("path") or "") for e in evidence_items
+                      if str(e.get("case_id") or "") == str(case.get("id") or "")]
+            if linked:
+                case["证据"] = " ".join(dict.fromkeys(p for p in linked if p))
+    ui_executed = any(
+        str(c.get("oracle_mode") or "ui").lower() == "ui"
+        and str(c.get("status") or "") in coverage_mod.EXECUTED_STATUSES
+        for c in cov.get("cases", {}).values()
+    )
     try:
-        from .qa_action import summarize as _summ
-        meta["判定动作"] = _summ(run_dir / "judgements.jsonl")
+        if ui_executed:
+            from .qa_action import summarize as _summ
+            meta["判定动作"] = _summ(run_dir / "judgements.jsonl")
     except Exception:
         pass
     text = gen_report(meta, cases,
                       conclusions.get("问题") or [],
                       conclusions.get("未覆盖") or [],
                       conclusions.get("证据") or [],
-                      conclusions=conclusions.get("结论") or None)
+                      conclusions=conclusions.get("结论") or None,
+                      coverage=cov.get("summary") or None,
+                      evidence_index=(pkg.get("evidence") or {}).get("items") or None,
+                      defects=(pkg.get("defects") or {}).get("defects") or None)
     out = Path(args.out).expanduser() if args.out else (
         run_dir / "test-reports" / "{}_测试报告.md".format(state.feature or "测试"))
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -512,7 +691,8 @@ def cmd_report(args):
                "conclusions": len(conclusions.get("结论") or []),
                "judgements": {"total": jg.get("total", 0), "verdict": jg.get("verdict", 0),
                               "control": jg.get("control", 0)},
-               "next_hint": "" if jg.get("total") else "judgements.total=0：本次未走 qa_action 统一判定入口"}
+               "next_hint": ("" if (not ui_executed or jg.get("total"))
+                             else "judgements.total=0：本次存在 UI 判定用例，未走 qa_action 统一判定入口")}
     return _finish(payload, kind="report", run_dir=run_dir, label="report", code=0)
 
 
@@ -559,6 +739,39 @@ def build_parser():
     p.add_argument("--run-dir", required=True)
     p.add_argument("--run-id", default=None)
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("init", help="初始化标准运行包（不联网）")
+    p.add_argument("--run-dir", required=True)
+    p.add_argument("--feature", required=True)
+    p.add_argument("--mode", choices=("quick", "standard", "deep"), default="standard")
+    p.add_argument("--requirement", action="append", default=[], help="需求编号/URL，可重复")
+    p.add_argument("--run-id", default=None)
+    p.add_argument("--base-url", default=None)
+    p.add_argument("--tenant", default=None)
+    p.add_argument("--role", default=None)
+    p.add_argument("--location", default=None)
+    p.add_argument("--config-fingerprint", default=None)
+    p.add_argument("--browser-profile", default=None)
+    p.add_argument("--app-version", default=None)
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser("audit", help="审计运行包覆盖、证据、复现和清理")
+    p.add_argument("--run-dir", required=True)
+    p.add_argument("--strict", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_audit)
+
+    p = sub.add_parser("metrics", help="聚合运行包质量与效率指标")
+    p.add_argument("--root", default="runs")
+    p.add_argument("--since", default=None)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_metrics)
+
+    p = sub.add_parser("replay", help="执行缺陷最小回放脚本")
+    p.add_argument("--run-dir", required=True)
+    p.add_argument("--defect", required=True)
+    p.set_defaults(func=cmd_replay)
 
     p = sub.add_parser("pages", help="查看站点/页面注册表（跨会话复用情报）")
     p.add_argument("--url", required=True)

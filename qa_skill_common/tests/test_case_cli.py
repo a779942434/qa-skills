@@ -325,18 +325,91 @@ class TestExecSingleFile(unittest.TestCase):
         self.assertEqual(sorted(q.name for q in case_out.iterdir()), ["C01.json"])
 
 
+class TestRunPackageCommands(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.run_dir = Path(self.tmp.name) / "run"
+
+    def test_init_audit_and_metrics(self):
+        rc, out = _call([
+            "init", "--run-dir", str(self.run_dir), "--feature", "示例功能",
+            "--mode", "standard", "--requirement", "R-01",
+            "--base-url", "http://example.test", "--tenant", "tenant-a",
+        ])
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out)["status"], "initialized")
+        self.assertTrue((self.run_dir / "manifest.json").exists())
+        # 未填需求条款时 strict 必须失败
+        rc, out = _call(["audit", "--run-dir", str(self.run_dir), "--strict"])
+        self.assertNotEqual(rc, 0)
+        self.assertFalse(json.loads(out)["ok"])
+        rc, out = _call(["metrics", "--root", str(self.run_dir)])
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out)["summary"]["runs"], 1)
+
+    def test_audit_returns_two_for_malformed_json(self):
+        self.assertEqual(_call([
+            "init", "--run-dir", str(self.run_dir), "--feature", "示例功能",
+        ])[0], 0)
+        (self.run_dir / "contract.json").write_text("{broken", encoding="utf-8")
+        rc, out = _call(["audit", "--run-dir", str(self.run_dir), "--strict"])
+        self.assertEqual(rc, 2)
+        self.assertFalse(json.loads(out)["structure_ok"])
+
+    def test_init_refuses_overwrite(self):
+        args = ["init", "--run-dir", str(self.run_dir), "--feature", "示例功能"]
+        self.assertEqual(_call(args)[0], 0)
+        rc, out = _call(args)
+        self.assertEqual(rc, 1)
+        self.assertIn("已存在", json.loads(out)["error"])
+
+
 class TestParserWiring(unittest.TestCase):
     def test_subcommands_present(self):
         ap = C.build_parser()
-        for cmd in ("exec", "run", "status", "report", "pages"):
+        for cmd in ("exec", "run", "status", "report", "pages", "init", "audit", "metrics", "replay"):
             self.assertEqual(ap.parse_args([cmd] + _required(cmd)).command, cmd)
 
 
 def _required(cmd):
     return {"exec": ["--steps", "s.json"], "run": ["--spec", "r.py"],
             "status": ["--run-dir", "."], "report": ["--run-dir", "."],
-            "pages": ["--url", "http://x"]}[cmd]
+            "pages": ["--url", "http://x"],
+            "init": ["--run-dir", ".", "--feature", "f"],
+            "audit": ["--run-dir", "."],
+            "metrics": ["--root", "."],
+            "replay": ["--run-dir", ".", "--defect", "BUG-01"]}[cmd]
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReplay(unittest.TestCase):
+    def test_replay_runs_script_and_updates_defect(self):
+        with tempfile.TemporaryDirectory() as d:
+            run_dir = Path(d) / "run"
+            _call(["init", "--run-dir", str(run_dir), "--feature", "回放示例"])
+            script = run_dir / "replay_demo.py"
+            script.write_text("print('ok')\n", encoding="utf-8")
+            (run_dir / "defects.json").write_text(json.dumps({
+                "schema_version": 1,
+                "defects": [{
+                    "id": "BUG-01", "title": "示例", "classification": "implementation_defect",
+                    "confidence": "high", "severity_local": "P1", "requirement_refs": ["R-01"],
+                    "evidence_ids": [], "evidence_channels": ["ui", "api"],
+                    "reproducibility": {"attempts": 0, "successes": 0},
+                    "environment": "test", "expected": "x", "actual": "y", "steps": "1",
+                    "status": "draft", "replay": {"script": "replay_demo.py"},
+                }],
+            }, ensure_ascii=False), encoding="utf-8")
+            rc, out = _call(["replay", "--run-dir", str(run_dir), "--defect", "BUG-01"])
+            self.assertEqual(rc, 0)
+            payload = json.loads(out)
+            self.assertEqual(payload["status"], "pass")
+            data = json.loads((run_dir / "defects.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["defects"][0]["reproducibility"]["attempts"], 1)
+            self.assertEqual(data["defects"][0]["reproducibility"]["successes"], 1)
+            idx = json.loads((run_dir / "evidence/index.json").read_text(encoding="utf-8"))
+            self.assertEqual(idx["items"][0]["type"], "replay")

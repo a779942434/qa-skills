@@ -73,6 +73,28 @@ python3 tools/check_skill_docs.py            # 断言红线条数 + 每条动作
 `sync-skills.sh` 前置会跑上下文预算与文档闸门；`vendor-common.sh --check` 会追加
 `qa_skill_common` 离线单测。基线数据与验收目标见 `tools/baseline.md`。
 
+## 标准运行包与判定闭环（2026-11-02）
+
+新标准功能测/深度专项测使用一个需求一个运行包：
+
+```bash
+python3 web-blackbox-testing/scripts/qa_case.py init --run-dir runs/<run> --feature <功能> --mode standard --requirement <需求号>
+python3 web-blackbox-testing/scripts/qa_case.py run --spec runs/<run>/run_all.py
+python3 web-blackbox-testing/scripts/qa_case.py audit --run-dir runs/<run> --strict
+python3 web-blackbox-testing/scripts/qa_case.py report --run-dir runs/<run>
+```
+
+运行包包含 `manifest.json`、`contract.json`、`coverage.json`、`evidence/index.json`、
+`defects.json`，并继续使用 `run_state.json`、`data_ledger.json`、`judgements.jsonl`、
+`conclusions.json`。`audit` 检查需求覆盖、P0/P1 证据、缺陷门槛、qa_action 采纳和数据清理；
+`metrics` 聚合运行包指标：
+
+```bash
+python3 web-blackbox-testing/scripts/qa_case.py metrics --root runs --since 2026-10-02
+```
+
+只有 `implementation_defect` 且通过证据/复现/需求引用门槛的缺陷才进入 ONES；需求风险、环境阻塞和测试伪影分别留档。
+
 ## 公共实现包（qa_skill_common）
 
 `web-blackbox-testing` 与 `ones-create-linked-defect` 共用同一套浏览器/登录/侦察实现。为避免两份代码漂移，仓库只在根目录 `qa_skill_common/` 维护**唯一来源**，再由脚本内置到各技能：

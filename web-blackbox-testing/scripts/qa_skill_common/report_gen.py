@@ -12,7 +12,10 @@ DATE = datetime.now().strftime("%Y-%m-%d")
 
 
 def gen_report(meta: dict, cases: list, problems: list, uncovered: list,
-               evidence: list, conclusions: list | None = None) -> str:
+               evidence: list, conclusions: list | None = None,
+               coverage: dict | None = None,
+               evidence_index: list | None = None,
+               defects: list | None = None) -> str:
     """生成测试报告骨架。
 
     meta:        {功能, 环境, 范围, 结果}
@@ -49,6 +52,20 @@ def gen_report(meta: dict, cases: list, problems: list, uncovered: list,
     if conclusions:
         lines += ["", "### 业务结论"]
         lines += ["- {}".format(str(c)) for c in conclusions]
+    if coverage:
+        lines += [
+            "",
+            "### 覆盖摘要",
+            "- 需求条款：{}（已映射 {}，覆盖率 {:.1%}）".format(
+                coverage.get("requirements", 0), coverage.get("requirements_mapped", 0),
+                float(coverage.get("requirement_coverage") or 0)),
+            "- 用例：{}，P0/P1：{}，已执行：{}".format(
+                coverage.get("cases", 0), coverage.get("p0_p1_cases", 0),
+                coverage.get("p0_p1_executed", 0)),
+            "- 不变量：{}（已映射 {}，覆盖率 {:.1%}）".format(
+                coverage.get("invariants", 0), coverage.get("invariants_mapped", 0),
+                float(coverage.get("invariant_coverage") or 0)),
+        ]
     lines += [
         "",
         "## 用例执行结果",
@@ -60,6 +77,12 @@ def gen_report(meta: dict, cases: list, problems: list, uncovered: list,
             f"| {c.get('id','')} | {c.get('模块','')} | {c.get('结果','')} | "
             f"{c.get('阻塞类型','')} | {c.get('证据','')} |"
         )
+    if defects:
+        lines += ["", "### 缺陷门槛摘要"]
+        for d in defects:
+            lines.append("- {}：分类={}，置信度={}，复现={}".format(
+                d.get("id", ""), d.get("classification", ""),
+                d.get("confidence", ""), d.get("reproducibility", "")))
     lines += [
         "",
         "## 问题清单",
@@ -76,6 +99,12 @@ def gen_report(meta: dict, cases: list, problems: list, uncovered: list,
         "## 证据",
     ]
     lines += [f"- {e}" for e in evidence]
+    if evidence_index:
+        lines += ["", "### 证据索引"]
+        for item in evidence_index:
+            lines.append("- {} [{}] case={} defect={}".format(
+                item.get("id", ""), item.get("type", ""),
+                item.get("case_id", ""), item.get("defect_id", "")))
     lines.append("")
     return "\n".join(lines)
 

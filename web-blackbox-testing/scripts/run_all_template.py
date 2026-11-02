@@ -44,6 +44,7 @@ from api_wait import ApiWatcher  # noqa: E402
 from qa_skill_common.qa_action import control as qa_control  # noqa: E402,F401  # 控件能力行为判定
 from qa_skill_common.qa_action import verdict as qa_verdict  # noqa: E402
 from qa_skill_common import paths as qa_paths  # noqa: E402
+from qa_skill_common import run_package  # noqa: E402
 from qa_skill_common.phase_runner import (  # noqa: E402
     BLOCK, FAIL, PASS, CaseGroupSpec, CaseSpec, PhaseRunner, PhaseSpec, RunContext, RunState,
 )
@@ -54,7 +55,6 @@ from bbt_helpers import (  # noqa: E402
     attach_error_watchers, capture_failure_context, configure_page_timeouts,
     error_report, reset_to, snap,
 )
-from report_gen import gen_report  # noqa: E402
 from session_helpers import (  # noqa: E402
     cdp_health, connect_session, ensure_mes_session, stop_persistent_session,
 )
@@ -71,6 +71,10 @@ CONFIG = {
     "session_dir": os.environ.get("MES_SESSION_DIR", ""),
     "out_dir": _OUT_DIR,
     "state_dir": Path(os.environ.get("RUN_STATE_DIR", str(_OUT_DIR / "state"))),
+    "requirement_refs": [],
+    "tenant_alias": os.environ.get("MES_TENANT", ""),
+    "role": os.environ.get("MES_ROLE", ""),
+    "location_org": os.environ.get("MES_LOCATION", ""),
 }
 
 # ============================ CASES（简单兼容模式） =========================
@@ -175,6 +179,11 @@ def _build_phases(watcher) -> list[PhaseSpec]:
             id=case["id"],
             module=case.get("模块", ""),
             run=lambda ctx, page, c=case: run_case(page, watcher, c),
+            priority=case.get("priority", "P2"),
+            requirement_refs=tuple(case.get("requirement_refs") or ()),
+            invariant_ids=tuple(case.get("invariant_ids") or ()),
+            oracle_mode=case.get("oracle_mode", "ui"),
+            evidence_required=case.get("evidence_required", True),
         )
         for case in CASES
     )
@@ -223,6 +232,29 @@ def main():
     CONFIG["state_dir"].mkdir(parents=True, exist_ok=True)
     run_id = CONFIG["run_id"] or f"{CONFIG['feature']}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     state = RunState.load_or_create(CONFIG["state_dir"], run_id=run_id, feature=CONFIG["feature"])
+    package_dir = CONFIG["state_dir"]
+    try:
+        if not (package_dir / run_package.MANIFEST).exists():
+            run_package.init_run_package(
+                package_dir, CONFIG["feature"], mode=os.environ.get("QA_RUN_MODE", "standard"),
+                requirements=CONFIG.get("requirement_refs") or [],
+                run_id=run_id,
+                environment=run_package.environment_snapshot(
+                    CONFIG.get("base_url") or _first_url(),
+                    tenant_alias=CONFIG.get("tenant_alias", ""),
+                    role=CONFIG.get("role", ""),
+                    location_org=CONFIG.get("location_org", ""),
+                ),
+            )
+        manifest = run_package.load_package(package_dir).get("manifest") or {}
+        run_package.update_manifest(
+            package_dir,
+            status="running",
+            started_at=manifest.get("started_at") or datetime.now().astimezone().isoformat(timespec="seconds"),
+            tooling={"qa_case": True, "phase_runner": True},
+        )
+    except Exception as exc:
+        print(f"[run_all] 运行包初始化警告：{type(exc).__name__}: {exc}")
 
     first_url = _first_url()
     persistent = None
@@ -278,29 +310,29 @@ def main():
         )
 
         errs = error_report(watchers)
-        problems = []
-        evidence = []
-        for rec in state.cases.values():
-            if rec.get("evidence"):
-                evidence.append(str(rec["evidence"]))
-        for item in state.results_for_report():
-            if item["结果"] != PASS:
-                problems.append({
-                    "id": item["id"],
-                    "标题": item.get("备注") or "待补充",
-                    "级别": "待确认",
-                    "备注": item.get("阻塞类型", ""),
-                })
         if errs:
-            problems.append({"id": "ERR", "标题": "错误监听命中", "级别": "待确认", "备注": str(errs)[:500]})
-
-        meta = {"功能": CONFIG["feature"], "环境": CONFIG["base_url"] or first_url}
-        report = gen_report(meta, state.results_for_report(), problems, uncovered=[], evidence=evidence)
-        report_path = CONFIG["out_dir"] / "测试报告.md"
-        report_path.write_text(report, encoding="utf-8")
+            state.meta["page_errors"] = errs[:20]
+            state.save()
+        try:
+            for cid, rec in (state.cases or {}).items():
+                if rec.get("evidence"):
+                    run_package.add_evidence(
+                        package_dir, rec["evidence"], case_id=cid,
+                        source="api" if rec.get("oracle_mode") == "api" else "ui",
+                    )
+            run_package.update_manifest(
+                package_dir,
+                status="completed" if summary.get("blocked", 0) == 0 else "blocked",
+                completed_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+                tooling={"qa_case": True, "phase_runner": True},
+            )
+        except Exception as exc:
+            print(f"[run_all] 证据索引写入警告：{type(exc).__name__}: {exc}")
         print(f"[run_all] 检查点：{state.state_path}")
         print(f"[run_all] 数据台账：{state.ledger_path}")
-        print(f"[run_all] 报告已生成：{report_path}")
+        print("[run_all] 收尾请执行：")
+        print(f"  python scripts/qa_case.py audit --run-dir {package_dir} --strict")
+        print(f"  python scripts/qa_case.py report --run-dir {package_dir}")
     except KeyboardInterrupt:
         keep_session = True
         print("[run_all] 用户中断：保留持久会话和检查点，可用 --resume 继续")

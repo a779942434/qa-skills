@@ -322,3 +322,28 @@ class TestMicroCaseGroups(unittest.TestCase):
         PhaseRunner(None, self.state).run(phases)
         PhaseRunner(None, self.state).run(phases, resume=True)
         self.assertEqual(setup_calls, ["setup"])
+
+
+class TestCaseMetadataPersistence(unittest.TestCase):
+    def test_priority_requirement_oracle_and_duration_are_persisted(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            state = RunState.load_or_create(d, "meta", "元数据")
+            case = CaseSpec(
+                "TC-01", lambda ctx, page: CaseResult(
+                    PASS, classification="pass", confidence="high",
+                    reproducibility={"attempts": 2, "successes": 2},
+                    evidence_refs=["EV-1"],
+                ),
+                priority="P0", requirement_refs=("R-01",), invariant_ids=("INV-01",),
+                oracle_mode="hybrid", evidence_required=True,
+            )
+            PhaseRunner(None, state).run([PhaseSpec("p1", cases=(case,))])
+            rec = state.cases["TC-01"]
+            self.assertEqual(rec["priority"], "P0")
+            self.assertEqual(rec["requirement_refs"], ["R-01"])
+            self.assertEqual(rec["invariant_ids"], ["INV-01"])
+            self.assertEqual(rec["oracle_mode"], "hybrid")
+            self.assertEqual(rec["classification"], "pass")
+            self.assertGreaterEqual(rec["duration_ms"], 0)
+            self.assertEqual(state.summary()["classifications"]["pass"], 1)

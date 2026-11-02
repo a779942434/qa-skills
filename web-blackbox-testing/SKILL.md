@@ -20,6 +20,13 @@ description: >-
 - **默认去重**：与 ONES 工单已关联缺陷去重，只提新增。
 - **纯黑盒且无工单 URL**：不停，跑完出清单，末尾提示「未提缺陷（缺工单 URL）」；提示词只需给站点/账号、需求、深度、范围、工单 URL。
 
+## 标准运行包（standard/deep）
+
+- 标准功能测和深度专项测先用 `qa_case.py init` 建立 `manifest.json/contract.json/coverage.json/evidence/index.json/defects.json`，结束时用 `qa_case.py audit --strict`。
+- 判定走 `qa_action`；API/SQL 专用判断在 coverage 中显式写 `oracle_mode=api/db`，不要伪造 UI 判定。
+- 最终报告只由 `qa_case.py report --run-dir <run-dir>` 生成；报告和缺陷统一读结构化运行包。
+- 详细文件职责和判定纪律见 [references/run-package.md](references/run-package.md)。
+
 ## 首次使用（3 步）
 
 1. **自检**：`python scripts/check_env.py`（缺浏览器/依赖/站点不通会明确指出）。
@@ -121,6 +128,7 @@ python scripts/qa_case.py pages  --url <URL> --feature <功能名>              
 
 ## 场景索引（触发时才读对应 reference）
 
+- 标准/深度运行包 → `references/run-package.md`
 - 新站点 / 组件库不同 / 级联树 → `references/advanced-ui.md`
 - 工控机 IPC、交接班、刷卡 → `references/ipc-ui.md`（脚本 `ipc_helpers.py`）
 - 造前置主数据（产品 / 工艺路线 / 工序 / BOM）→ `references/master-data-setup.md`（脚本 `bbt_osd_setup.py`）

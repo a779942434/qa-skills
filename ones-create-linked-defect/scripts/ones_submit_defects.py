@@ -21,6 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from qa_skill_common import bug_report_schema as bug_schema  # noqa: E402
+from qa_skill_common import oracle  # noqa: E402
 from qa_skill_common import paths as qa_paths  # noqa: E402
 from qa_skill_common.bbt_helpers import wait_app_ready
 from ones_config import load_field_mapping  # noqa: E402
@@ -78,6 +79,77 @@ def parse_bug_report(md_path):
     for err in result["errors"]:
         print(f"[清单校验] {err}", file=sys.stderr)
     return result["bugs"]
+
+
+def parse_defects_json(json_path):
+    """读取结构化 defects.json，并转换为 ONES 提交所需的 bug 结构。
+
+    JSON 主账优先于 Markdown；提交前先过 oracle.validate_defect。
+    这是新增入口，旧 Markdown 清单仍保持兼容。
+    """
+    path = Path(json_path).expanduser().resolve()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    records = data.get("defects") if isinstance(data, dict) else None
+    if records is None:
+        raise SystemExit(f"结构化缺陷文件缺少 defects 数组: {path}")
+    evidence_items = []
+    evidence_path = path.parent / "evidence" / "index.json"
+    if evidence_path.exists():
+        try:
+            evidence_items = json.loads(evidence_path.read_text(encoding="utf-8")).get("items") or []
+        except Exception:
+            evidence_items = []
+    evidence_map = {str(x.get("id")): x for x in evidence_items}
+    bugs = []
+    for rec in records:
+        gate = oracle.validate_defect(rec, strict=False)
+        if not gate["ok"]:
+            raise SystemExit(
+                f"结构化缺陷未通过门槛 {rec.get('id', '')}: " + "; ".join(gate["errors"])
+            )
+        evidence_files = list(rec.get("evidence_files") or [])
+        missing_evidence_ids = []
+        for eid in rec.get("evidence_ids") or []:
+            item = evidence_map.get(str(eid))
+            if not item or not item.get("path"):
+                missing_evidence_ids.append(str(eid))
+            elif item["path"] not in evidence_files:
+                evidence_files.append(item["path"])
+        if missing_evidence_ids:
+            raise SystemExit(
+                f"结构化缺陷证据ID不存在 {rec.get('id', '')}: "
+                + ", ".join(missing_evidence_ids)
+            )
+        # 去重并保持顺序，避免同一路径重复上传
+        evidence_files = list(dict.fromkeys(str(x) for x in evidence_files if x))
+        fields = {
+            "严重程度": rec.get("severity_local") or rec.get("severity") or "一般",
+            "环境": rec.get("environment", "") if isinstance(rec.get("environment"), str)
+            else json.dumps(rec.get("environment") or {}, ensure_ascii=False),
+            "前置条件": rec.get("preconditions", ""),
+            "操作步骤": rec.get("steps", ""),
+            "预期结果": rec.get("expected", ""),
+            "实际结果": rec.get("actual", ""),
+            "复现率": rec.get("reproducibility", ""),
+            "证据": " ".join(str(x) for x in evidence_files),
+            "需求引用": ", ".join(str(x) for x in (rec.get("requirement_refs") or [])),
+            "分类": rec.get("classification", ""),
+            "置信度": rec.get("confidence", ""),
+            "复现方式": rec.get("reproduction_method", ""),
+            "证据ID": ", ".join(str(x) for x in (rec.get("evidence_ids") or [])),
+            "ONES单号": rec.get("ones_key", ""),
+            "备注": rec.get("notes", ""),
+        }
+        desc_lines = [f"{k}：{v}" for k, v in fields.items() if v not in (None, "")]
+        bugs.append({
+            "key": rec.get("id", ""),
+            "title": rec.get("title", ""),
+            "severity": fields["严重程度"],
+            "fields": fields,
+            "evidence": evidence_files,
+            "desc": "\n".join(desc_lines),
+        })
+    return bugs, evidence_map
 
 
 def resolve_option_uuid(field_defs, field_uuid, wanted):
@@ -241,7 +313,9 @@ def inline_description_evidence(page, team_uuid, defect_uuid, files, timeout=90)
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bug-report", required=True, help="缺陷清单 md 路径")
+    source = ap.add_mutually_exclusive_group(required=True)
+    source.add_argument("--bug-report", help="缺陷清单 md 路径（旧格式兼容）")
+    source.add_argument("--defects-json", help="结构化 defects.json（优先入口）")
     ap.add_argument("--work-order", required=True, help="ONES 工单 URL")
     ap.add_argument("--profile", default=None, help="field-mapping.yaml 项目段名（如 <项目名>）")
     ap.add_argument("--sample-defect", default=None, help="可选：字段模板缺陷 uuid（仅显式兜底，不作为常规前置）")
@@ -262,17 +336,27 @@ def main():
 
     team, task = parse_work_order(args.work_order)
 
-    # 清单定位：绝对路径直用；否则在统一产物根 + 历史位置中查找
-    resolved = qa_paths.find_bug_report(args.bug_report)
-    if resolved is None:
-        searched = "\n".join("  - " + str(d) for d in qa_paths.bug_report_search_dirs())
-        raise SystemExit(
-            f"未找到缺陷清单：{args.bug_report}\n"
-            f"可传绝对路径，或把清单放到以下任一目录（或用 ONES_BUG_REPORTS_DIR 指定）：\n{searched}"
-        )
-    args.bug_report = str(resolved)
-
-    bugs = parse_bug_report(args.bug_report)
+    if args.defects_json:
+        source_path = Path(args.defects_json).expanduser()
+        if not source_path.is_absolute():
+            source_path = Path.cwd() / source_path
+        if not source_path.exists():
+            raise SystemExit(f"未找到结构化缺陷文件：{source_path}")
+        args.defects_json = str(source_path.resolve())
+        bugs, _ = parse_defects_json(args.defects_json)
+        br_dir = source_path.parent
+    else:
+        # 清单定位：绝对路径直用；否则在统一产物根 + 历史位置中查找
+        resolved = qa_paths.find_bug_report(args.bug_report)
+        if resolved is None:
+            searched = "\n".join("  - " + str(d) for d in qa_paths.bug_report_search_dirs())
+            raise SystemExit(
+                f"未找到缺陷清单：{args.bug_report}\n"
+                f"可传绝对路径，或把清单放到以下任一目录（或用 ONES_BUG_REPORTS_DIR 指定）：\n{searched}"
+            )
+        args.bug_report = str(resolved)
+        bugs = parse_bug_report(args.bug_report)
+        br_dir = Path(args.bug_report).resolve().parent
     wanted = expand_keys(args.only)
     if args.bugs:
         wanted |= expand_keys(args.bugs.split(","))
@@ -290,8 +374,9 @@ def main():
             b["title"] = f"【{feature}】{b['title']}"
     scope_uuid = (profile or {}).get("issue_type_scope_uuid")
     profile_warnings = check_profile(profile)
-    br_dir = Path(args.bug_report).resolve().parent
     evidence_base = [str(br_dir)]
+    if args.defects_json:
+        evidence_base.insert(0, str(Path(args.defects_json).parent))
     # web 约定：证据放在 <产物根>/bug-reports/<功能>/，补入一级子目录以便按文件名命中
     try:
         for sub in sorted(br_dir.iterdir()):

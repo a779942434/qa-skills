@@ -37,9 +37,8 @@ description: >-
 `config/settings.yaml` 或环境变量覆盖；客户项目/人员/优先级等字段统一维护在
 `config/field-mapping.yaml`（换项目只改配置，不动本文件与 references）。
 
-**上游衔接**：本地缺陷清单由 `web-blackbox-testing` 产出（命名 `bug-reports/YYYY-MM-DD_功能名_缺陷清单.md`，
-含 环境/操作步骤/预期/实际/复现率/严重程度/需求引用）。本技能负责录入，并按清单文末
-「回归验证」段执行关闭或评论 @处理人。
+**上游衔接**：优先读取运行包 `defects.json`（分类、置信度、证据ID、复现方式、ONES 状态）；
+Markdown 缺陷清单仅作人工阅读和旧数据兼容。只有 `implementation_defect` 且通过 oracle 门槛的缺陷才能提交。
 
 ## 前置
 

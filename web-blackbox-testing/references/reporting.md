@@ -29,6 +29,12 @@
 - `P3 轻微`：文案、样式、体验类问题。
 - `P4 建议`：可优化建议、非阻断性体验优化，不影响功能正确性。
 
+## 标准运行包报告纪律
+
+- 标准/深度测试只由 `qa_case.py report --run-dir <run-dir>` 渲染报告；`run_all_template.py` 不再直接写最终 Markdown。
+- 报告读取 `conclusions.json`、`coverage.json`、`evidence/index.json` 和 `defects.json`，避免用例状态、证据与报告三处漂移。
+- 旧运行目录仍可手工生成报告，但新运行不得以手写正文替代结构化状态。
+
 ## 快速报告模板
 
 快速模式只输出这四块，避免生成过多文档拖慢执行：

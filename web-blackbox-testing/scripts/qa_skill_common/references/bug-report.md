@@ -39,11 +39,17 @@
 | `复现率` | 否 | 如 `3/3` | `3/3` |
 | `证据` | 否 | **纯文件名/通配符**，空格或顿号分隔 | `BUG-01.png export_*.xlsx` |
 | `需求引用` | 否 | 需求点/PRD 条号 | `PRD-3.2` |
+| `分类` | 新结构化缺陷必填 | `implementation_defect` / `requirement_risk` / `environment_blocked` / `test_artifact` | `implementation_defect` |
+| `置信度` | 新结构化缺陷必填 | `high` / `medium` / `low` | `high` |
+| `复现方式` | 新结构化缺陷必填 | `2/2`、确定性 API、单通道模式等 | `2/2` |
+| `证据ID` | 新结构化缺陷必填 | 运行包 evidence index 中的 ID | `EV-abc123` |
+| `ONES单号` | 否 | 提交后回填 | `#211474` |
 | `备注` | 否 | 补充说明 | `待产品确认` |
 
 行格式统一为 `- 字段名：值`。
 
 > **缺 `严重程度` 会被解析侧明确报 `[清单校验] ...缺必填字段 严重程度`**，不会静默丢字段。
+> 新结构化缺陷还必须通过 `qa_skill_common.oracle.validate_defect()`：只有 `implementation_defect` 且证据/复现/需求引用齐全才允许进入 ONES。
 
 ## 三、证据规则
 

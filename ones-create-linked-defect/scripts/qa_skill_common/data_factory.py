@@ -30,6 +30,22 @@ class DataRecipe:
     values: dict[str, Any] = field(default_factory=dict)
     requires: tuple[str, ...] = ()
     notes: str = ""
+    cleanup: tuple[str, ...] = ()
+    irreversible: bool = False
+    owner: str = ""
+    batch_prefix: str = "QA"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "values": dict(self.values),
+            "requires": list(self.requires),
+            "notes": self.notes,
+            "cleanup": list(self.cleanup),
+            "irreversible": bool(self.irreversible),
+            "owner": self.owner,
+            "batch_prefix": self.batch_prefix,
+        }
 
 
 class RecipeRegistry:
@@ -69,17 +85,26 @@ def default_registry() -> RecipeRegistry:
         values={"product": "已启用产品", "dates": "有效范围", "demand": ">0"},
         requires=("enabled_product", "workstation_route"),
         notes="零件委外默认生成链路",
+        cleanup=("撤销测试计划", "删除测试主数据"),
+        owner="qa",
+        batch_prefix="OUTPART",
     ))
     reg.register(DataRecipe(
         "委外计划排产-工序导入",
         values={"product": "已启用产品", "route": "属于产品", "procedure": "属于路线"},
         requires=("enabled_product", "workstation_route", "procedure_in_route"),
         notes="工序导入必须同时具备产品、路线、工序三层匹配",
+        cleanup=("撤销测试计划", "删除测试主数据"),
+        owner="qa",
+        batch_prefix="OUTPROC",
     ))
     reg.register(DataRecipe(
         "停用产品导入独立验证",
         values={"product": "已停用产品"},
         requires=("disabled_product", "enabled_route", "procedure_in_route"),
         notes="若没有可用路线，导入会先命中路线错误，无法独立验证产品停用提示",
+        cleanup=("删除测试导入数据",),
+        owner="qa",
+        batch_prefix="DISABLED",
     ))
     return reg

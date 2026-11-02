@@ -91,6 +91,11 @@ class CaseResult:
     actual: str = ""
     data: dict = field(default_factory=dict)
     blocker_type: str = ""
+    classification: str = ""
+    confidence: str = ""
+    reproducibility: dict = field(default_factory=dict)
+    evidence_refs: list = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
 
     def __post_init__(self):
         self.status = normalize_status(self.status)
@@ -103,6 +108,11 @@ class CaseSpec:
     module: str = ""
     depends_on: tuple[str, ...] = ()
     optional: bool = False
+    priority: str = "P2"
+    requirement_refs: tuple[str, ...] = ()
+    invariant_ids: tuple[str, ...] = ()
+    oracle_mode: str = "ui"
+    evidence_required: bool = True
 
 
 @dataclass
@@ -256,11 +266,13 @@ class RunState:
 
     def _save_ledger(self) -> None:
         ledger = {
+            "schema_version": 1,
             "run_id": self.run_id,
             "feature": self.feature,
             "updated_at": self.updated_at,
             "records": self.data,
             "metadata": self.data_meta,
+            "cleanup": self.meta.get("cleanup", {}),
         }
         self.ledger_path.write_text(json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -318,6 +330,16 @@ class RunState:
     def get_data(self, key: str, default: Any = None) -> Any:
         return self.data.get(key, default)
 
+    def mark_cleanup(self, status: str, note: str = "", records: dict | None = None) -> None:
+        """记录测试数据清理结果；status 建议 clean/restored/retained/not_required。"""
+        self.meta["cleanup"] = {
+            "status": str(status or ""),
+            "note": note or "",
+            "records": records or {},
+            "updated_at": _now(),
+        }
+        self.save()
+
     def case_status(self, case_id: str) -> str | None:
         rec = self.cases.get(case_id) or {}
         return rec.get("status")
@@ -328,11 +350,13 @@ class RunState:
 
     def mark_case(self, case_id: str, phase_id: str, status: str, note: str = "",
                   evidence: str = "", actual: str = "", data: dict | None = None,
-                  blocker_type: str = "") -> None:
+                  blocker_type: str = "", metadata: dict | None = None,
+                  duration_ms: int = 0) -> None:
         status = normalize_status(status)
         previous = self.cases.get(case_id) or {}
         attempts = int(previous.get("attempts", 0)) + 1
-        self.cases[case_id] = {
+        metadata = dict(metadata or {})
+        rec = {
             "case_id": case_id,
             "phase_id": phase_id,
             "status": status,
@@ -341,8 +365,15 @@ class RunState:
             "actual": actual or note or "",
             "blocker_type": blocker_type or "",
             "attempts": attempts,
+            "duration_ms": int(previous.get("duration_ms", 0) or 0) + int(duration_ms or 0),
             "updated_at": _now(),
         }
+        for key in ("priority", "requirement_refs", "invariant_ids", "oracle_mode",
+                    "evidence_required", "classification", "confidence",
+                    "reproducibility", "evidence_refs"):
+            if key in metadata:
+                rec[key] = metadata[key]
+        self.cases[case_id] = rec
         if data:
             self.data.setdefault("case_data", {})[case_id] = data
         self.save()
@@ -381,6 +412,15 @@ class RunState:
                 "阻塞类型": rec.get("blocker_type", ""),
                 "证据": rec.get("evidence", ""),
                 "备注": rec.get("note", ""),
+                "优先级": rec.get("priority", ""),
+                "需求点": rec.get("requirement_refs", []),
+                "不变量": rec.get("invariant_ids", []),
+                "oracle_mode": rec.get("oracle_mode", ""),
+                "分类": rec.get("classification", ""),
+                "置信度": rec.get("confidence", ""),
+                "复现": rec.get("reproducibility", {}),
+                "证据ID": rec.get("evidence_refs", []),
+                "耗时ms": rec.get("duration_ms", 0),
             }
             for cid, rec in self.cases.items()
         ]
@@ -405,6 +445,12 @@ class RunState:
                 key: sum(1 for rec in self.cases.values() if rec.get("blocker_type") == key)
                 for key in (BLOCKER_PRODUCT, BLOCKER_TEST_DATA, BLOCKER_SCRIPT)
             },
+            "classifications": {
+                key: sum(1 for rec in self.cases.values() if rec.get("classification") == key)
+                for key in ("implementation_defect", "requirement_risk",
+                            "environment_blocked", "test_artifact", "pass")
+            },
+            "duration_ms": sum(int(rec.get("duration_ms", 0) or 0) for rec in self.cases.values()),
             "phases": self.phases,
         }
 
@@ -554,12 +600,26 @@ class PhaseRunner:
             self.state.mark_case(case.id, phase.id, BLOCK, note=note, blocker_type=BLOCKER_TEST_DATA)
             self.log(f"[{case.id}] {BLOCK} {note}")
             return False
+        started = time.time()
         try:
             result = normalize_case_result(case.run(self.context, self.page))
+            metadata = {
+                "priority": case.priority,
+                "requirement_refs": list(case.requirement_refs),
+                "invariant_ids": list(case.invariant_ids),
+                "oracle_mode": case.oracle_mode,
+                "evidence_required": case.evidence_required,
+                "classification": result.classification,
+                "confidence": result.confidence,
+                "reproducibility": result.reproducibility,
+                "evidence_refs": result.evidence_refs,
+            }
+            metadata.update(result.metadata or {})
             self.state.mark_case(
                 case.id, phase.id, result.status, note=result.note,
                 evidence=result.evidence, actual=result.actual, data=result.data,
-                blocker_type=result.blocker_type,
+                blocker_type=result.blocker_type, metadata=metadata,
+                duration_ms=int((time.time() - started) * 1000),
             )
             self.log(f"[{case.id}] {result.status} {result.note}")
             return False
@@ -568,8 +628,20 @@ class PhaseRunner:
                 self._handle_infrastructure(phase.id, case.id, exc, phase)
                 return True
             note = f"{type(exc).__name__}: {exc}"
-            self.state.mark_case(case.id, phase.id, FAIL, note=note, actual=note,
-                                 blocker_type=classify_blocker(exc))
+            self.state.mark_case(
+                case.id, phase.id, FAIL, note=note, actual=note,
+                blocker_type=classify_blocker(exc),
+                metadata={
+                    "priority": case.priority,
+                    "requirement_refs": list(case.requirement_refs),
+                    "invariant_ids": list(case.invariant_ids),
+                    "oracle_mode": case.oracle_mode,
+                    "evidence_required": case.evidence_required,
+                    "classification": "test_artifact",
+                    "confidence": "low",
+                },
+                duration_ms=int((time.time() - started) * 1000),
+            )
             self.log(f"[{case.id}] {FAIL} {note}")
             return False
 

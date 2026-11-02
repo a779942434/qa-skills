@@ -6,6 +6,10 @@
     python scripts/qa_case.py run  --spec runs/<日期_功能>/run_all.py --resume
     python scripts/qa_case.py status --run-dir runs/<日期_功能>
     python scripts/qa_case.py report --run-dir runs/<日期_功能>
+    python scripts/qa_case.py init --run-dir runs/<日期_功能> --feature <功能> --mode standard
+    python scripts/qa_case.py audit --run-dir runs/<日期_功能> --strict
+    python scripts/qa_case.py metrics --root runs
+    python scripts/qa_case.py replay --run-dir runs/<日期_功能> --defect BUG-001
 
 一次调用跑一批：stdout 只回单行 JSON 摘要（≤4KB），完整现场落
 <run-dir>/cases/<label>.json。

@@ -90,6 +90,7 @@ SETS = {
         "generate-manufacturing-test-cases/references/template.md",
         "generate-manufacturing-test-cases/references/method.md",
         "generate-manufacturing-test-cases/references/triggers.md",
+        "web-blackbox-testing/references/run-package.md",
         "web-blackbox-testing/references/playwright-strategy.md",
     ],
     # 含提缺陷：再加 ones 链路
@@ -99,6 +100,7 @@ SETS = {
         "generate-manufacturing-test-cases/references/template.md",
         "generate-manufacturing-test-cases/references/method.md",
         "generate-manufacturing-test-cases/references/triggers.md",
+        "web-blackbox-testing/references/run-package.md",
         "web-blackbox-testing/references/playwright-strategy.md",
         "ones-create-linked-defect/SKILL.md",
         "ones-create-linked-defect/references/ones-ui.md",

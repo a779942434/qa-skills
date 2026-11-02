@@ -23,14 +23,19 @@
 | `import_helpers.py` | 导入边界框架：混合文件、部分成功、失败文件下载与解析 |
 | `datagrip_datasources.py` | DataGrip 数据源自动发现与只读查询（复用本机已配置连接，免再要连接串） |
 | `field_contracts.py` | 页面字段到接口参数的契约注册表 |
-| `data_factory.py` | 测试批次、唯一编号与数据配方前置校验 |
-| `data_cleanup.py` | 数据基线对比与清理策略：测试改数据后留痕「已恢复 / 未恢复」 |
+| `data_factory.py` | 测试批次、唯一编号、数据配方前置校验、清理动作与不可逆标记 |
+| `data_cleanup.py` | 数据基线对比、结构化清理报告与「已恢复 / 保留 / 未恢复」留痕 |
 | `output.py` | **输出限长契约**：`emit()` 截断观察字段并给 counts/full_path；判定字段（toast/内联错误/HTTP/data_diff）永不截断 |
 | `fingerprint.py` | 元素指纹：组件探针 / 结构快照对比 / 相似度自愈定位 |
 | `page_registry.py` | **站点/页面注册表**：跨会话复用直达 URL / 等待接口 / 选择器 / 坑；两级可信度 + 一致性校验 |
-| `case_cli.py` | **单用例/批次闭环 CLI**（`scripts/qa_case.py`）：`exec` / `run` / `status` / `report` / `pages`；是 phase_runner 的门面，**不碰状态文件**（由 `tests/test_case_cli_boundary.py` 静态断言） |
-| `report_gen.py` | 报告/缺陷清单骨架生成：`gen_report(..., conclusions=)` 接结构化结论，改 `conclusions.json` 再重渲染，禁止手写正文 |
-| `bug_report_schema.py` | **缺陷清单 schema**：web 产出与 ones 解析的唯一契约（标题/字段/证据行） |
+| `case_cli.py` | **单用例/批次闭环 CLI**（`scripts/qa_case.py`）：`exec` / `run` / `status` / `report` / `pages` / `init` / `audit` / `metrics` / `replay`；是 phase_runner 的门面，**不碰状态文件**（由 `tests/test_case_cli_boundary.py` 静态断言） |
+| `run_package.py` | **标准运行包**：manifest / contract / coverage / evidence index / defects 的初始化、读取、证据索引与综合审计；兼容 legacy 目录 |
+| `oracle.py` | **结论判定树**：区分 implementation_defect / requirement_risk / environment_blocked / test_artifact / pass，并校验缺陷准入门槛 |
+| `coverage.py` | 需求条款→风险→用例→不变量覆盖审计：检查孤儿用例、空决策、P0/P1 未执行和缺失映射 |
+| `invariants.py` | 可执行业务不变量：数量守恒、状态转移、身份唯一、时间顺序、数据血缘等 |
+| `metrics.py` | 运行包指标聚合：qa_case/qa_action 采纳率、覆盖率、无效缺陷率、复现率、耗时 |
+| `report_gen.py` | 报告/缺陷清单骨架生成：`gen_report(..., conclusions=, coverage=, evidence_index=, defects=)` 接结构化结论并单次渲染，禁止手写正文 |
+| `bug_report_schema.py` | **缺陷清单 schema**：web 产出与 ones 解析的唯一契约（标题/字段/证据行；新增分类/置信度/复现方式/证据ID/ONES单号可选字段） |
 
 ## 环境配置（站点/账号不再写死）
 
