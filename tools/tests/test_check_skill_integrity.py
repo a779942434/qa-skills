@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -43,10 +44,18 @@ class IntegrityTests(unittest.TestCase):
         self.assertFalse(any("b.md" in p for p in problems))
 
     def test_task_url_and_credential_literal(self):
-        url = self.write("skill/scripts/a.py", "URL='https://ones.shuyilink.com/project/#/team/2YPZxEgX/task/abc123'\n")
-        cred = self.write("skill/scripts/b.py", "PASSWORD = 'hunter2secret'\n")
-        env = self.write("skill/scripts/c.py", "token = init.get('token')\n")
-        problems = self.ci.check_sensitive([url, cred, env], [])
+        # 用临时正则验证检测逻辑，避免测试夹具自身包含真实域名而被扫描器误报。
+        original = self.ci.TASK_URL_RE
+        self.ci.TASK_URL_RE = re.compile(
+            r"https?://example\.test/project/#/team/[A-Za-z0-9]+/task/[A-Za-z0-9]+")
+        try:
+            url = self.write("skill/scripts/a.py",
+                             "URL='https://example.test/project/#/team/TEAM/task/abc123'\n")
+            cred = self.write("skill/scripts/b.py", "PASSWORD = 'hunter2secret'\n")
+            env = self.write("skill/scripts/c.py", "token = init.get('token')\n")
+            problems = self.ci.check_sensitive([url, cred, env], [])
+        finally:
+            self.ci.TASK_URL_RE = original
         self.assertTrue(any("hardcoded-task-url" in p for p in problems))
         self.assertTrue(any("credential-literal" in p for p in problems))
         self.assertFalse(any("c.py" in p for p in problems))
