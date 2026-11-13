@@ -33,7 +33,7 @@ FIELDS = (
 REQUIRED_FIELDS = ("严重程度",)
 
 HEADING_RE = re.compile(
-    r"(?m)^#{2,3}\s*(BUG-[A-Za-z0-9-]+)\s*(?:【[^】]*】)?\s*[：:]\s*(.+?)\s*$"
+    r"(?m)^#{2,3}\s*(BUG-[A-Za-z0-9-]+)\s*(?:【[^】]*】)?\s*(?:[：:]\s*|\s+)(.+?)\s*$"
 )
 FIELD_RE = re.compile(r"(?m)^\s*[-*]\s*([^：:\n]+)[：:]\s*(.*)$")
 EVIDENCE_EXT_RE = re.compile(r"\.(?:png|jpg|jpeg|gif|xlsx|csv|txt)$", re.IGNORECASE)
@@ -42,9 +42,14 @@ EVIDENCE_SPLIT_RE = re.compile(r"[\s、,，;；]+")
 
 def _extract_evidence(raw):
     out = []
-    for tok in EVIDENCE_SPLIT_RE.split(raw or ""):
-        tok = tok.strip()
-        if tok and EVIDENCE_EXT_RE.search(tok):
+    seen = set()
+    for m in re.finditer(
+        r"[^\s、,，;；`'\"<>]+\.(?:png|jpg|jpeg|gif|xlsx|csv|txt)\b",
+        raw or "", re.IGNORECASE,
+    ):
+        tok = m.group(0).strip()
+        if tok and tok not in seen:
+            seen.add(tok)
             out.append(tok)
     return out
 
@@ -68,7 +73,7 @@ def parse(text):
 
         fields = {}
         for fm in FIELD_RE.finditer(body):
-            name = fm.group(1).strip()
+            name = re.sub(r"^\*+|\*+$", "", fm.group(1).strip()).strip()
             if name in FIELDS:
                 fields[name] = fm.group(2).strip()
 

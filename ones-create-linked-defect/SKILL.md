@@ -1,6 +1,6 @@
 ---
 name: ones-create-linked-defect
-version: 2.1.0
+version: 2.2.0
 description: >-
   ONES 缺陷全流程：根据本地缺陷清单在 ones.shuyilink.com 中处理缺陷工作项——
   新建关联缺陷（关联内容-新建关联工作项-缺陷类型，填内容/必填字段/证据），
@@ -67,20 +67,27 @@ Markdown 缺陷清单仅作人工阅读和旧数据兼容。只有 `implementati
 
 ## 工作流
 
-1. **连接浏览器**：`ones_helpers.connect()` 连 CDP（默认 9334）并**复用已有 ONES 页面**；CDP 不健康由
-   `ones_edge_server` 监管器自动重启，客户端只等待/重连，不自行杀 Edge。跳飞书授权页时点「授权」完成 SSO。
-   不要重复打开多个 ONES 工单页/弹窗（标签页堆积会导致 CDP 超时）。
+1. **连接浏览器**：`ones_helpers.connect()` 连 CDP（默认 9334），复用浏览器上下文但**不复用任务页**；每个任务
+   `open_task_detail_page()` 新开页 + 单号断言，用完关闭。CDP 不健康由 `ones_edge_server` 监管器重启，
+   客户端只等待/重连；SSO 授权页点「授权」。
 2. **打开工单**：访问用户给的工单 URL（任务 UUID 在 URL 尾部），读标题与 ID，据此定位本地缺陷清单。
    读字段只用 `get_task_required_fields()`，**不要打印/搬运完整 `field_values` 或描述富文本**。
 3. **新建关联缺陷**（清单里有未登记缺陷时）——**优先 API 直连**：
    - 字段选项 uuid 未缓存时，优先后 `ones_project_setup.py --env-keyword` 从字段定义解析写入 profile；
      仅当 GraphQL 字段定义不可用时才用 UI 下拉捕获兜底。
    - 之后走 `build_defect_fields()`（主工单取共有字段，profile 取系统环境等特有字段；提交前校验必填，
-     缺值直接报字段名，**不用历史缺陷兜底**）→ `create_linked_defect()` 创建并关联 →
-     `upload_task_attachment_api()` 直传本条证据 → `append_task_description_images()` 内嵌图片到描述。
-   - 或直接用 `ones_submit_defects.py --profile <项目> --bug-report <清单> --work-order <工单URL>`
-     批量提交。批量顺序固定为「单条创建 → 关联 → 附件核验 → 描述内嵌核验」，任一步失败即带 uuid 停止后续建单。
-     默认必须内嵌截图；仅明确不需要时加 `--no-inline-evidence`。
+     缺值直接报字段名，**不用历史缺陷兜底**）→ `create_linked_defect()` 创建并关联。
+   - **两阶段提交（默认）**：`ones_submit_defects.py --profile <项目> --bug-report <清单> --work-order <工单URL>`
+     默认 `--mode fast`，只做 Phase A「创建 → 关联 → 附件核验」，先拿单号即返回；附件走
+     `ensure_task_attachment()`，同名同大小复用，避免重试重复上传。
+   - **Phase B 补描述图**：`--repair-images --ledger <提交账本>`。图片走附件 API + `res/attachment/{uuid}`
+     签名 URL + `tasks/update3`，**禁止用 CKEditor 图片按钮**；失败只降级，不回滚、不阻塞单号。
+     要一次跑完用 `--mode full`；只读校验用 `--verify-only`。
+   - **账本幂等**：默认 `<缺陷清单目录>/ones-submission-ledger.json`，状态
+     `created→linked→attached→inline_pending→inline_ok→verified`（失败为 `failed`）。重试/断点续跑
+     必须先查账本，已有 `task_uuid` 只补关联/附件/图片，**绝不重复建单**；标题重复但无账本时拒绝建单并告警。
+   - 成功后核对账本与关联数量；发现同标题已存在时用 `list_related_tasks()` + `dedup_check()` 查重，
+     不重复创建。
    - **处理人规则（必读）**：UI 展示/交互类缺陷（字段显示、带出、界面交互、样式）加 `--handler frontend`；
      数据/逻辑/后端类默认 `--handler backend`。已建单要改处理人时用 `tasks/update` 改 `95jUV2Mb`。
    - **UI 弹窗仅作兜底**：工单抽屉 → 页签「关联内容」→「新建关联工作项」→ 类型搜索「缺陷」→
@@ -102,11 +109,15 @@ Markdown 缺陷清单仅作人工阅读和旧数据兼容。只有 `implementati
 ## 关键坑（最高频 5 条）
 
 - 含中文的脚本必须写成 `.py` 文件（UTF-8）再执行，避免内联 heredoc 被 shell 转码乱码。
-- 页面有多个 CKEditor：主工单描述 `editor1` **禁止操作**；只操作提缺陷弹窗 `editor2`（`[role=dialog]` 内含「选择关联关系」的那个）。
+- **CKEditor 编辑器按页面区分**：主工单详情里 `editor1` 是主描述，**禁止操作**；缺陷详情页只有 `editor1`
+  是缺陷描述。补图必须用 `append_task_description_images_api()` 新开任务页 + 单号断言后写入，
+  不要复用当前标签页，也不要靠 `CKEDITOR.instances` 的可见性猜编辑器。
 - 提交成功不能只看 toast：必须断言**弹窗关闭 + 关联内容数量 +1 + 标题出现**；同标题重复要告警去重。
 - **任务详情路由**：必须带 `project/component/view` 上下文（简版 `#/team/<team>/task/<uuid>` 会落到任务列表页，
-  导致描述内嵌图片 / 附件回填空等超时）；统一用 `ones_helpers.ensure_task_detail_page()`，上下文从当前页 URL 继承，
-  **不要把具体项目的 project/component/view 写死进脚本**。
+  导致描述内嵌图片 / 附件回填空等超时）；每个任务用 `open_task_detail_page()` 新开页 + 完整 URL +
+  `assert_task_context()`，**不要用当前页/hash 切换**，也不要把 project/component/view 写死。
+- **图片成功判据是渲染态**：`src` 不能是 `data:`/`blob:` 占位，浏览器 `naturalWidth>0`、期望文件名齐全、
+  描述内占位数为 0；只数 `<img>` 节点或只看接口 200 都会误判。
 - **提交前默认净化描述**：`sanitize_text()` 过滤本机绝对路径、`账号 xxx`、`密码/token`、「（租户 xx，账号 yy）」等
   只应留在本地的信息，命中明细打印在日志；可用 `profile.redact.patterns` / `--redact-pattern` 扩展、`--no-redact` 关闭。
   **客户名、实例 URL、本机路径等写死内容只放 `config/field-mapping.local.yaml`（已 gitignore）与本地产物目录，公共文件一律不放。**

@@ -8,6 +8,7 @@
     get_transitions(page, team_uuid, task_uuid)-> GET task/{uuid}/transitions
     send_comment(page, team_uuid, task_uuid, rich_html) -> POST send_message
 """
+import html as html_lib
 import json
 import mimetypes
 import re
@@ -21,6 +22,11 @@ from playwright.sync_api import sync_playwright
 from ones_config import resolve_settings
 from qa_skill_common.bbt_helpers import wait_any, wait_gone, wait_dialog_open, wait_app_ready
 from qa_skill_common.session_helpers import cdp_health, wait_cdp_healthy
+from ones_submission import (
+    image_report,
+    merge_description_images,
+    verify_image_urls,
+)
 
 
 def _cdp_url():
@@ -317,8 +323,21 @@ def send_comment(page, team_uuid, task_uuid, rich_html):
     )
 
 
+def link_task_to_parent(page, team_uuid, parent_task_uuid, task_uuid):
+    """仅执行关联（用于 created 状态的中断恢复）；失败不创建新单。"""
+    base = f"/project/api/project/team/{team_uuid}"
+    link = _api(page, "POST", f"{base}/task/{parent_task_uuid}/related_tasks", {
+        "task_uuids": [task_uuid],
+        "task_link_type_uuid": "UUID0001",
+        "link_desc_type": "link_out_desc",
+    })
+    if isinstance(link, dict) and link.get("code") not in (None, 200, "200", "OK"):
+        raise RuntimeError(f"关联主工单失败: {link}")
+    return True
+
+
 def create_linked_defect(page, team_uuid, parent_task_uuid, summary, field_values, assign,
-                         task_uuid=None, issue_type_scope_uuid=None):
+                         task_uuid=None, issue_type_scope_uuid=None, on_created=None):
     """在 ONES 创建缺陷并关联到主工单（API 直连，替代繁琐的 UI 弹窗操作）。
 
     参数:
@@ -330,6 +349,8 @@ def create_linked_defect(page, team_uuid, parent_task_uuid, summary, field_value
                       替换 field001=标题 / field002=描述；严重程度留 null 用默认值）
         assign: 负责人 UUID（如当前登录账号）
         task_uuid: 新任务 UUID（默认自动生成：assign 前缀 + 8 位随机）
+        on_created: add3 成功、关联前的回调(number, uuid)，用于账本先落盘；
+                    关联失败时重试可只补关联，不会重复建单。
 
     返回: (number, task_uuid)
     """
@@ -355,22 +376,17 @@ def create_linked_defect(page, team_uuid, parent_task_uuid, summary, field_value
     number = task.get("number")
     if not number:
         raise RuntimeError(f"创建缺陷失败: {created}")
+    if on_created:
+        on_created(number, task_uuid)
     try:
-        link = _api(page, "POST", f"{base}/task/{parent_task_uuid}/related_tasks", {
-            "task_uuids": [task_uuid],
-            "task_link_type_uuid": "UUID0001",
-            "link_desc_type": "link_out_desc",
-        })
+        link_task_to_parent(page, team_uuid, parent_task_uuid, task_uuid)
     except Exception as exc:
         raise RuntimeError(
             f"缺陷已创建 #{number} uuid={task_uuid}，但关联主工单失败；"
             f"请勿重复创建，重试关联时使用该 uuid。原因: {exc}"
         ) from exc
-    if isinstance(link, dict) and link.get("code") not in (None, 200, "200", "OK"):
-        raise RuntimeError(
-            f"缺陷已创建 #{number} uuid={task_uuid}，但关联主工单失败: {link}"
-        )
     return number, task_uuid
+
 
 
 def get_parent_handlers(page, team_uuid, task_uuid):
@@ -725,6 +741,170 @@ def ensure_task_detail_page(page, team_uuid, task_uuid, timeout=20.0):
             '请先打开该项目任意任务详情页（使 URL 含该上下文）后重试。'
         ) from exc
     return url
+
+
+# ---------- 显式任务上下文 / 描述图片 API 化（2026-11-13 复盘后固化）----------
+
+def assert_task_context(page, task_uuid, number=None):
+    """写操作前的路由守卫：URL 必须含目标 uuid，页面正文必须含目标单号。"""
+    url = getattr(page, 'url', '') or ''
+    if task_uuid not in url:
+        raise RuntimeError(f'页面上下文错误：期望 task={task_uuid}，实际 URL={url[:180]}')
+    if number:
+        body = page.locator('body').inner_text() or ''
+        if str(number) not in body:
+            raise RuntimeError(f'页面正文未出现目标单号 #{number}，拒绝写入；URL={url[:180]}')
+
+
+def open_task_detail_page(source_page, team_uuid, task_uuid, number=None, timeout=25.0):
+    """为单个任务新开独立页面并强校验上下文，禁止复用“当前标签页”。
+
+    调用方负责 close()；本函数失败时会关闭新页，避免残留标签页。
+    """
+    ctx = source_page.context
+    url = task_detail_url(source_page, team_uuid, task_uuid)
+    page = ctx.new_page()
+    try:
+        page.goto(url, wait_until='domcontentloaded', timeout=60000)
+        wait_app_ready(page, timeout=min(float(timeout), 20))
+        page.wait_for_selector(
+            '.richtext-editor-viewer:visible, .richtext-input-viewer-wrapper:visible',
+            timeout=int(min(float(timeout), 20) * 1000),
+        )
+        assert_task_context(page, task_uuid, number=number)
+        return page
+    except Exception:
+        try:
+            page.close()
+        except Exception:
+            pass
+        raise
+
+
+def resolve_attachment_url(page, team_uuid, resource_uuid):
+    """把附件 resource_uuid 解析成带 e/token 的签名 URL；可直接写进 <img src>。"""
+    data = _api(
+        page, 'GET',
+        f'/project/api/project/team/{team_uuid}/res/attachment/{resource_uuid}'
+        '?op=imageMogr2%2Fauto-orient',
+    ) or {}
+    url = str(data.get('url') or '')
+    if not url.startswith('https://'):
+        raise RuntimeError(f'附件 {resource_uuid} 未返回可用签名 URL: {data}')
+    return url
+
+
+def ensure_task_attachment(page, team_uuid, task_uuid, file_path):
+    """同名同大小附件已存在则复用 resource_uuid，避免重试时重复上传。"""
+    path = Path(file_path).expanduser()
+    data = get_task_attachments(page, team_uuid, task_uuid) or {}
+    size = path.stat().st_size if path.is_file() else -1
+    for item in (data.get('attachments') or []):
+        if item.get('name') == path.name and int(item.get('size') or -1) == size and item.get('uuid'):
+            return item['uuid']
+    return upload_task_attachment_api(page, team_uuid, task_uuid, path)
+
+
+def verify_task_description_images(page, team_uuid, task_uuid, expected_names=None):
+    """读取描述 HTML 并做渲染态校验；返回 image_report 结构。"""
+    info = get_task_info(page, team_uuid, task_uuid) or {}
+    fv = {f.get('field_uuid'): f.get('value') for f in (info.get('field_values') or [])}
+    html = str(fv.get('field016') or info.get('desc_rich') or '')
+    urls = [x['src'] for x in image_report(html)['images'] if not x['placeholder']]
+    rendered = verify_image_urls(page, urls)
+    report = image_report(html, rendered)
+    if expected_names:
+        present = {x.get('filename') for x in report['images']}
+        missing = [n for n in expected_names if n and n not in present]
+        report['missing'] = missing
+        report['ok'] = bool(report['ok'] and not missing)
+    return report
+
+
+def append_task_description_images_api(page, team_uuid, task_uuid, image_paths,
+                                       timeout=90.0, number=None):
+    """Phase B：附件 API + 签名 URL 写入描述，禁止走 CKEditor 图片按钮。
+
+    流程：ensure_task_attachment → resolve_attachment_url → 追加 figure →
+    独立任务页 setData → 保存 → 回读 HTML + 浏览器加载校验。
+    """
+    import time as _t
+    files = [Path(p) for p in image_paths
+             if Path(p).suffix.lower() in ('.png', '.jpg', '.jpeg', '.gif', '.webp')]
+    result = {'requested': [p.name for p in files], 'uploaded': [], 'inserted': [],
+              'verified': False, 'report': None}
+    if not files:
+        result['verified'] = True
+        return result
+
+    info = get_task_info(page, team_uuid, task_uuid) or {}
+    fv = {f.get('field_uuid'): f.get('value') for f in (info.get('field_values') or [])}
+    current_html = str(fv.get('field016') or info.get('desc_rich') or '')
+    uploaded = []
+    for path in files:
+        ruid = ensure_task_attachment(page, team_uuid, task_uuid, path)
+        url = resolve_attachment_url(page, team_uuid, ruid)
+        uploaded.append({'name': path.name, 'resource_uuid': ruid, 'url': url})
+    result['uploaded'] = uploaded
+    new_html = merge_description_images(current_html, uploaded, ref_id=task_uuid)
+    if new_html == current_html:
+        result['report'] = verify_task_description_images(
+            page, team_uuid, task_uuid, expected_names=result['requested'])
+        result['verified'] = bool(result['report'].get('ok'))
+        return result
+
+    detail = open_task_detail_page(page, team_uuid, task_uuid, number=number,
+                                   timeout=min(float(timeout), 25))
+    try:
+        viewer = detail.locator('.richtext-input-viewer-wrapper:visible').first
+        viewer.wait_for(state='visible', timeout=int(min(float(timeout), 20) * 1000))
+        if not _enter_description_edit(detail, viewer, timeout=min(float(timeout), 10.0)):
+            raise RuntimeError('未进入描述 CKEditor 编辑态')
+        editor_name = detail.evaluate(
+            """() => {
+                const insts = window.CKEDITOR && window.CKEDITOR.instances || {};
+                if (insts.editor1) return 'editor1';
+                const keys = Object.keys(insts);
+                return keys.length ? keys[0] : '';
+            }"""
+        )
+        if not editor_name:
+            raise RuntimeError('未找到 CKEditor 实例')
+        detail.evaluate(
+            """([name, html]) => {
+                const inst = window.CKEDITOR.instances[name];
+                inst.setData(html);
+                inst.fire('change');
+            }""",
+            [editor_name, new_html],
+        )
+        _t.sleep(0.3)
+        with detail.expect_response(
+                lambda r: '/tasks/update3' in r.url, timeout=int(timeout * 1000)) as resp_info:
+            detail.get_by_role('button', name='保存', exact=True).last.click(timeout=5000)
+        resp = resp_info.value
+        if int(resp.status) >= 400:
+            raise RuntimeError(f'描述保存失败 HTTP {resp.status}: {resp.text()[:300]}')
+
+        deadline = _t.time() + min(float(timeout), 30.0)
+        report = {'ok': False}
+        while _t.time() < deadline:
+            report = verify_task_description_images(
+                detail, team_uuid, task_uuid, expected_names=result['requested'])
+            if report.get('ok'):
+                break
+            _t.sleep(0.8)
+        result['inserted'] = [x['name'] for x in uploaded]
+        result['report'] = report
+        result['verified'] = bool(report.get('ok'))
+        if not result['verified']:
+            raise RuntimeError(f'描述图片渲染态校验失败: {report}')
+        return result
+    finally:
+        try:
+            detail.close()
+        except Exception:
+            pass
 
 
 # ---------- 描述净化（2026-10-16 固化）----------

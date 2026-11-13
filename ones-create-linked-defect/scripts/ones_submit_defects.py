@@ -1,22 +1,31 @@
 # -*- coding: utf-8 -*-
-"""ONES 一键提缺陷 CLI（整合字段缓存 + 登录账号 + 默认严重程度 + 页面复用）。
+"""ONES 一键提缺陷 CLI（两阶段提交 + 账本幂等 + 渲染态校验）。
 
 用法:
-    python scripts/ones_submit_defects.py --bug-report <缺陷清单.md> --work-order <工单URL>
-        [--profile <项目名>] [--system-env <环境名或uuid>]
+    # Phase A：建单/关联/附件，先拿单号（默认，推荐）
+    python scripts/ones_submit_defects.py --bug-report <清单.md> --work-order <工单URL> \
+        --profile <项目> --mode fast
 
-优化点:
-    - 只用 get_task_required_fields() 提取建缺陷必填字段，不搬运完整描述；
-    - 负责人/验证人自动取当前 ONES 登录账号（get_current_user）；
-    - 严重程度默认「一般」（黑盒报告的 S1~S4 仅自用，不据此定级）；
-    - issue_type_scope_uuid 优先从 profile 读取，缺失时按项目+缺陷类型直接发现；
-    - 不再依赖“先找一张历史缺陷再复制”，历史缺陷只保留为显式兜底。
+    # Phase B：补描述内嵌图（可稍后单独跑；失败不阻塞 Phase A）
+    python scripts/ones_submit_defects.py --ledger <账本.json> --work-order <工单URL> \
+        --repair-images
+
+    # 只校验账面 + 描述图渲染态
+    python scripts/ones_submit_defects.py --ledger <账本.json> --work-order <工单URL> \
+        --verify-only
+
+设计约束（2026-11-13 复盘后固化）:
+    - 建单与描述美化分离；Phase A 成功即交付单号，Phase B 失败只降级。
+    - 每个缺陷有稳定 submission_key；重试先查账本，已有 task_uuid 就复用。
+    - 附件走 API 并以附件接口核验；描述图走附件 API + 签名 URL，不再用 CKEditor 图片按钮。
+    - 成功判定为渲染态：src 非 data:、浏览器 naturalWidth>0、文件名齐全。
 """
 import argparse
 import json
 import glob
 import re
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -25,21 +34,35 @@ from qa_skill_common import oracle  # noqa: E402
 from qa_skill_common import paths as qa_paths  # noqa: E402
 from qa_skill_common.bbt_helpers import wait_app_ready
 from ones_config import load_field_mapping  # noqa: E402
+from ones_submission import (  # noqa: E402
+    STATE_ATTACHED,
+    STATE_CREATED,
+    STATE_FAILED,
+    STATE_INLINE_OK,
+    STATE_INLINE_PENDING,
+    STATE_LINKED,
+    STATE_VERIFIED,
+    SubmissionLedger,
+    submission_key,
+)
 from ones_helpers import (  # noqa: E402
     DEFAULT_SEVERITY,
+    append_task_description_images_api,
     build_defect_fields,
     connect,
     create_linked_defect,
     dedup_check,
     disconnect,
+    ensure_task_attachment,
     get_current_user,
     get_issue_type_fields,
     get_issue_type_scope,
     get_parent_context,
+    get_task_attachments,
+    link_task_to_parent,
     list_related_tasks,
-    append_task_description_images,
     sanitize_text,
-    upload_task_evidences_api,
+    verify_task_description_images,
 )
 
 
@@ -68,12 +91,37 @@ def expand_keys(tokens):
     return keys
 
 
-def parse_bug_report(md_path):
-    """解析缺陷清单（契约单一来源：qa_skill_common.bug_report_schema）。
+def key_in_wanted(key, wanted):
+    if not wanted:
+        return True
+    upper = str(key).upper()
+    if upper in {w.upper() for w in wanted}:
+        return True
+    for w in wanted:
+        m = re.fullmatch(r"BUG[-_]?(\d{1,3})", str(w), re.IGNORECASE)
+        if m and upper.endswith(f"-{int(m.group(1)):03d}"):
+            return True
+    return False
 
-    标题格式 `### BUG-编号：标题`；字段与证据行规则见 schema；
-    解析出错时打印 [清单校验] 提示（不静默丢字段）。
-    """
+
+def filter_wanted(bugs, wanted):
+    """支持完整 key 与数字后缀简写（BUG-ZZ-001 可写 001）。"""
+    if not wanted:
+        return bugs
+    keys = {b["key"].upper() for b in bugs}
+    exact = {w for w in wanted if w.upper() in keys}
+    suffixes = set()
+    for w in wanted:
+        m = re.fullmatch(r"BUG[-_]?(\d{1,3})", w, re.IGNORECASE)
+        if m:
+            suffixes.add(f"-{int(m.group(1)):03d}")
+    return [b for b in bugs
+            if b["key"].upper() in exact
+            or any(b["key"].upper().endswith(s) for s in suffixes)]
+
+
+def parse_bug_report(md_path):
+    """解析缺陷清单（契约单一来源：qa_skill_common.bug_report_schema）。"""
     text = Path(md_path).read_text(encoding="utf-8")
     result = bug_schema.parse(text)
     for err in result["errors"]:
@@ -82,11 +130,7 @@ def parse_bug_report(md_path):
 
 
 def parse_defects_json(json_path):
-    """读取结构化 defects.json，并转换为 ONES 提交所需的 bug 结构。
-
-    JSON 主账优先于 Markdown；提交前先过 oracle.validate_defect。
-    这是新增入口，旧 Markdown 清单仍保持兼容。
-    """
+    """读取结构化 defects.json，并转换为 ONES 提交所需的 bug 结构。"""
     path = Path(json_path).expanduser().resolve()
     data = json.loads(path.read_text(encoding="utf-8"))
     records = data.get("defects") if isinstance(data, dict) else None
@@ -120,7 +164,6 @@ def parse_defects_json(json_path):
                 f"结构化缺陷证据ID不存在 {rec.get('id', '')}: "
                 + ", ".join(missing_evidence_ids)
             )
-        # 去重并保持顺序，避免同一路径重复上传
         evidence_files = list(dict.fromkeys(str(x) for x in evidence_files if x))
         fields = {
             "严重程度": rec.get("severity_local") or rec.get("severity") or "一般",
@@ -229,6 +272,7 @@ def check_profile(profile):
             warnings.append(f"缺少 {label}")
     return warnings
 
+
 def apply_overrides(field_values, overrides):
     out = []
     for f in field_values:
@@ -243,11 +287,9 @@ def apply_overrides(field_values, overrides):
 def resolve_evidence(bug, base_dirs):
     found, missing = [], []
     for name in bug["evidence"]:
-        # 支持多个文件用 空格/中英文顿号逗号分号 分隔
         tokens = [t for t in re.split(r"[\s、,，;；]+", name) if t]
         hit = False
         for token in tokens:
-            # 支持通配符（如 template_*.xlsx / export_*.xlsx）
             if "*" in token or "?" in token:
                 resolved = False
                 for base in base_dirs:
@@ -259,7 +301,7 @@ def resolve_evidence(bug, base_dirs):
                 if resolved:
                     hit = True
                 continue
-            if not re.search(r"\.(?:png|jpg|jpeg|gif|xlsx|csv|txt)$", token):
+            if not re.search(r"\.(?:png|jpg|jpeg|gif|xlsx|csv|txt)$", token, re.IGNORECASE):
                 continue
             p = Path(token)
             if p.exists():
@@ -274,46 +316,74 @@ def resolve_evidence(bug, base_dirs):
                     break
         if not hit:
             missing.append(name)
-    return found, missing
+    # 去重并保持顺序，避免同一文件上传两次
+    unique = []
+    seen = set()
+    for p in found:
+        key = str(p.resolve())
+        if key not in seen:
+            seen.add(key)
+            unique.append(p)
+    return unique, missing
 
 
 def attach_evidence(page, team_uuid, defect_uuid, files):
-    """把证据直接绑定到刚创建的 defect_uuid，并以附件接口确认成功。"""
+    """幂等上传附件：同名同大小已存在则复用；最终以附件接口文件名核验。"""
     try:
-        ok, _data, missing, uploaded = upload_task_evidences_api(
-            page, team_uuid, defect_uuid, files, timeout=90,
-        )
-    except Exception as exc:
+        for path in files:
+            ensure_task_attachment(page, team_uuid, defect_uuid, path)
+        expected = [Path(p).name for p in files]
+        deadline = time.time() + 30
+        missing = expected
+        while True:
+            data = get_task_attachments(page, team_uuid, defect_uuid) or {}
+            present = {a.get("name") for a in (data.get("attachments") or [])}
+            missing = [n for n in expected if n not in present]
+            if not missing or time.time() >= deadline:
+                break
+            time.sleep(0.6)
+        if missing:
+            return False, f"附件接口未确认: {', '.join(missing)}"
+        return True, f"附件接口已确认 {len(files)} 个文件"
+    except Exception as exc:  # noqa: BLE001
         return False, f"附件接口上传失败: {exc}"
-    if ok:
-        return True, f"附件接口已确认新增 {len(uploaded)} 个文件"
-    return False, f"附件接口超时，缺少: {', '.join(missing)}"
 
 
-def inline_description_evidence(page, team_uuid, defect_uuid, files, timeout=90):
-    """把图片证据以内嵌图片形式补入缺陷描述；非图片证据不处理。"""
+def inline_description_evidence(page, team_uuid, defect_uuid, files, timeout=90, number=None):
+    """Phase B：附件 API + 签名 URL 写描述，渲染态校验。"""
     images = [Path(p) for p in files
               if Path(p).suffix.lower() in ('.png', '.jpg', '.jpeg', '.gif', '.webp')]
     if not images:
         return True, '无图片证据，跳过描述内嵌'
     try:
-        result = append_task_description_images(
-            page, team_uuid, defect_uuid, images, timeout=timeout,
+        result = append_task_description_images_api(
+            page, team_uuid, defect_uuid, images, timeout=timeout, number=number,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return False, f'描述内嵌图片失败: {exc}'
     if not result.get('verified'):
-        return False, f"描述内嵌图片未校验通过: {result}"
+        return False, f"描述内嵌图片未校验通过: {result.get('report')}"
+    report = result.get('report') or {}
     return True, (
         f"描述内嵌图片 {len(result.get('inserted') or [])} 个，"
-        f"跳过重复 {len(result.get('skipped') or [])} 个，"
-        f"当前共 {result.get('image_count')} 张"
+        f"当前共 {report.get('count', 0)} 张，占位 {len(report.get('placeholder') or [])} 个"
     )
+
+
+def default_ledger_path(base_dir):
+    return Path(base_dir) / "ones-submission-ledger.json"
+
+
+def find_bug(bugs, key):
+    for b in bugs:
+        if b["key"] == key:
+            return b
+    return None
 
 
 def main():
     ap = argparse.ArgumentParser()
-    source = ap.add_mutually_exclusive_group(required=True)
+    source = ap.add_mutually_exclusive_group(required=False)
     source.add_argument("--bug-report", help="缺陷清单 md 路径（旧格式兼容）")
     source.add_argument("--defects-json", help="结构化 defects.json（优先入口）")
     ap.add_argument("--work-order", required=True, help="ONES 工单 URL")
@@ -324,9 +394,14 @@ def main():
     ap.add_argument("--bugs", default="", help="逗号分隔编号，支持数字简写")
     ap.add_argument("--handler", choices=["backend", "frontend"], help="处理人：后端/前端（默认后端；UI 展示/交互类缺陷提前端）")
     ap.add_argument("--severity", default=DEFAULT_SEVERITY, help="严重程度（默认一般）")
+    ap.add_argument("--mode", choices=["fast", "full"], default="fast",
+                    help="fast=Phase A 建单/关联/附件后立即返回；full=同时补描述图（默认 fast）")
+    ap.add_argument("--ledger", default=None, help="提交账本 JSON；默认 <缺陷清单目录>/ones-submission-ledger.json")
+    ap.add_argument("--repair-images", action="store_true", help="Phase B：按账本补描述内嵌图（需 --ledger）")
+    ap.add_argument("--verify-only", action="store_true", help="只校验账本/描述图，不建单（需 --ledger）")
     ap.add_argument("--dry-run", action="store_true", help="只解析校验不建单")
     ap.add_argument("--skip-evidence", action="store_true", help="跳过证据补传")
-    ap.add_argument("--no-inline-evidence", action="store_true", help="只传附件，不把截图内嵌到描述")
+    ap.add_argument("--no-inline-evidence", action="store_true", help="兼容旧参数：只传附件，不内嵌描述")
     ap.add_argument("--no-redact", action="store_true",
                     help="关闭描述净化（默认过滤本地路径/账号密码/租户标注等只应留在本地的信息）")
     ap.add_argument("--redact-pattern", action="append", default=None,
@@ -335,78 +410,107 @@ def main():
     args = ap.parse_args()
 
     team, task = parse_work_order(args.work_order)
+    phase_b_only = bool(args.repair_images or args.verify_only)
+    if phase_b_only and not args.ledger:
+        raise SystemExit("--repair-images / --verify-only 必须显式指定 --ledger")
+    if not phase_b_only and not (args.bug_report or args.defects_json):
+        raise SystemExit("创建缺陷必须提供 --bug-report 或 --defects-json")
 
-    if args.defects_json:
-        source_path = Path(args.defects_json).expanduser()
-        if not source_path.is_absolute():
-            source_path = Path.cwd() / source_path
-        if not source_path.exists():
-            raise SystemExit(f"未找到结构化缺陷文件：{source_path}")
-        args.defects_json = str(source_path.resolve())
-        bugs, _ = parse_defects_json(args.defects_json)
-        br_dir = source_path.parent
-    else:
-        # 清单定位：绝对路径直用；否则在统一产物根 + 历史位置中查找
-        resolved = qa_paths.find_bug_report(args.bug_report)
-        if resolved is None:
-            searched = "\n".join("  - " + str(d) for d in qa_paths.bug_report_search_dirs())
-            raise SystemExit(
-                f"未找到缺陷清单：{args.bug_report}\n"
-                f"可传绝对路径，或把清单放到以下任一目录（或用 ONES_BUG_REPORTS_DIR 指定）：\n{searched}"
-            )
-        args.bug_report = str(resolved)
-        bugs = parse_bug_report(args.bug_report)
-        br_dir = Path(args.bug_report).resolve().parent
-    wanted = expand_keys(args.only)
-    if args.bugs:
-        wanted |= expand_keys(args.bugs.split(","))
-    if wanted:
-        bugs = [b for b in bugs if b["key"] in wanted]
-    if not bugs:
-        print("未解析到 BUG 段，请检查缺陷清单格式（### BUG-编号：标题）")
-        return
+    bugs = []
+    evidence_base = []
+    br_dir = None
+    if not phase_b_only:
+        if args.defects_json:
+            source_path = Path(args.defects_json).expanduser()
+            if not source_path.is_absolute():
+                source_path = Path.cwd() / source_path
+            if not source_path.exists():
+                raise SystemExit(f"未找到结构化缺陷文件：{source_path}")
+            args.defects_json = str(source_path.resolve())
+            bugs, _ = parse_defects_json(args.defects_json)
+            br_dir = source_path.parent
+        else:
+            resolved = qa_paths.find_bug_report(args.bug_report)
+            if resolved is None:
+                searched = "\n".join("  - " + str(d) for d in qa_paths.bug_report_search_dirs())
+                raise SystemExit(
+                    f"未找到缺陷清单：{args.bug_report}\n"
+                    f"可传绝对路径，或把清单放到以下任一目录（或用 ONES_BUG_REPORTS_DIR 指定）：\n{searched}"
+                )
+            args.bug_report = str(resolved)
+            bugs = parse_bug_report(args.bug_report)
+            br_dir = Path(args.bug_report).resolve().parent
+
+        wanted = expand_keys(args.only)
+        if args.bugs:
+            wanted |= expand_keys(args.bugs.split(","))
+        if wanted:
+            bugs = filter_wanted(bugs, wanted)
+        if not bugs:
+            print("未解析到 BUG 段，请检查缺陷清单格式（### BUG-编号：标题）")
+            return
+
+        evidence_base = [str(br_dir)]
+        if args.defects_json:
+            evidence_base.insert(0, str(Path(args.defects_json).parent))
+        try:
+            for sub in sorted(br_dir.iterdir()):
+                if sub.is_dir():
+                    evidence_base.append(str(sub))
+        except OSError:
+            pass
 
     field_map = load_field_mapping()
     profile = field_map.get(args.profile) if args.profile else None
-    feature = (profile or {}).get("site", {}).get("feature", "")
-    for b in bugs:
-        if feature and not b["title"].startswith("【"):
-            b["title"] = f"【{feature}】{b['title']}"
-    scope_uuid = (profile or {}).get("issue_type_scope_uuid")
-    profile_warnings = check_profile(profile)
-    evidence_base = [str(br_dir)]
-    if args.defects_json:
-        evidence_base.insert(0, str(Path(args.defects_json).parent))
-    # web 约定：证据放在 <产物根>/bug-reports/<功能>/，补入一级子目录以便按文件名命中
-    try:
-        for sub in sorted(br_dir.iterdir()):
-            if sub.is_dir():
-                evidence_base.append(str(sub))
-    except OSError:
-        pass
-    if profile and profile.get("site", {}).get("evidence_dir"):
-        proj_root = Path(__file__).resolve().parent.parent
-        evidence_base.insert(0, str(proj_root / profile["site"]["evidence_dir"]))
-
-    print("解析到缺陷:", ", ".join(b["key"] for b in bugs))
-    for w in profile_warnings:
-        print(f"[警告] {w}")
-    if args.dry_run:
+    if not phase_b_only:
+        ev_dir = ((profile or {}).get("site") or {}).get("evidence_dir")
+        if ev_dir:
+            ev_path = Path(ev_dir).expanduser()
+            if not ev_path.is_absolute():
+                ev_path = Path(__file__).resolve().parent.parent / ev_path
+            evidence_base.insert(0, str(ev_path))
+            evidence_base.insert(0, str(ev_path.parent))
+        feature = (profile or {}).get("site", {}).get("feature", "")
         for b in bugs:
-            ev, missing = resolve_evidence(b, evidence_base)
-            print(f"  {b['key']} | {b['title'][:40]} | 证据 {len(ev)}/{len(b['evidence'])}")
-            for m in missing:
-                print(f"    [缺] {m}")
-        return
+            if feature and not b["title"].startswith("【"):
+                b["title"] = f"【{feature}】{b['title']}"
+        profile_warnings = check_profile(profile)
+        print("解析到缺陷:", ", ".join(b["key"] for b in bugs))
+        for w in profile_warnings:
+            print(f"[警告] {w}")
+        if args.dry_run:
+            for b in bugs:
+                ev, missing = resolve_evidence(b, evidence_base)
+                print(f"  {b['key']} | {b['title'][:40]} | 证据 {len(ev)}/{len(b['evidence'])}")
+                for m in missing:
+                    print(f"    [缺] {m}")
+            return
+
+    ledger_path = Path(args.ledger).expanduser().resolve() if args.ledger else default_ledger_path(br_dir)
+    if phase_b_only and not ledger_path.exists():
+        raise SystemExit(f"提交账本不存在: {ledger_path}")
 
     pw, browser, ctx, page = connect()
     try:
+        ledger = SubmissionLedger(ledger_path, task)
+        if not phase_b_only:
+            print(f"提交账本: {ledger_path}")
+
         req, parent_fv = get_parent_context(page, team, task)
         print("主工单:", req["number"], req["summary"])
+
+        if args.repair_images:
+            _repair_images(page, team, task, ledger, args)
+            return
+        if args.verify_only:
+            _verify_ledger(page, team, ledger)
+            return
+
         handler = req["fields"]["frontend"] if args.handler == "frontend" else (req["fields"]["backend"] or req["fields"]["frontend"])
         current = get_current_user(page)
         print("当前登录账号:", current["name"], current["uuid"], "| 处理人:", handler)
 
+        scope_uuid = (profile or {}).get("issue_type_scope_uuid")
         if not scope_uuid:
             scope_uuid = get_issue_type_scope(page, team, req.get("project_uuid"))
             print("issue_type_scope_uuid: 按项目+缺陷类型自动发现")
@@ -420,9 +524,6 @@ def main():
             overrides["R3UqL3Vm"] = resolve_option_uuid(field_defs, "R3UqL3Vm", args.system_env)
         print("字段覆盖表:", json.dumps(overrides, ensure_ascii=False))
 
-        # 先完成字段与证据预检，避免“已建单但证据缺失”的半成品。
-        # 描述净化：默认过滤「只应留在本地」的写死信息（本地路径 / 账号密码 / 租户标注），
-        # 规则可经 profile.redact.patterns 或 --redact-pattern 扩展；--no-redact 关闭。
         redact_patterns = list(((profile or {}).get("redact") or {}).get("patterns") or [])
         for item in (args.redact_pattern or []):
             if "==" in item:
@@ -454,45 +555,154 @@ def main():
 
         results = []
         for b, fvs, files in prepared:
-            # 创建缺陷、关联主工单、绑定证据按单条缺陷串行完成。
-            number, uuid = create_linked_defect(
-                page, team, task, b["title"], fvs,
-                assign=current["uuid"], issue_type_scope_uuid=scope_uuid,
+            rec = _phase_a_one(
+                page, team, task, b, fvs, files, current, scope_uuid,
+                ledger, skip_evidence=args.skip_evidence,
             )
-            print(f"  {b['key']} 已创建并关联 #{number} uuid={uuid}")
-            results.append({"key": b["key"], "number": number, "uuid": uuid})
+            results.append(rec)
+            if args.skip_evidence or args.no_inline_evidence or args.mode == "fast":
+                if files:
+                    ledger.mark(b["key"], STATE_INLINE_PENDING)
+                else:
+                    ledger.mark(b["key"], STATE_INLINE_OK)
+                continue
             if files:
-                ok, msg = attach_evidence(page, team, uuid, files)
-                print(f"    附件绑定: {ok} {msg} ({len(files)} 个文件)")
-                if not ok:
-                    raise RuntimeError(
-                        f"{b['key']} 已创建并关联 #{number} uuid={uuid}，"
-                        f"但附件未确认，停止后续建单；请勿重复创建，按此 uuid 重试附件"
-                    )
-                if not args.no_inline_evidence:
-                    inline_ok, inline_msg = inline_description_evidence(
-                        page, team, uuid, files, timeout=args.inline_timeout,
-                    )
-                    print(f"    描述内嵌图片: {inline_ok} {inline_msg}")
-                    if not inline_ok:
-                        raise RuntimeError(
-                            f"{b['key']} 已创建并关联 #{number} uuid={uuid}，附件已上传，"
-                            f"但截图未内嵌到描述；请勿重复创建，按此 uuid 重试描述内嵌图片"
-                        )
+                ok, msg = inline_description_evidence(
+                    page, team, rec["uuid"], files,
+                    timeout=args.inline_timeout, number=rec.get("number"),
+                )
+                print(f"    描述内嵌图片: {ok} {msg}")
+                ledger.mark(b["key"], STATE_INLINE_OK if ok else STATE_FAILED,
+                            inline_message=msg)
+            else:
+                ledger.mark(b["key"], STATE_INLINE_OK)
 
-        titles = list_related_tasks(page, team, task, req["summary"] or "")
-        dup = dedup_check(titles)
-        print("=== 去重校验 ===")
-        if dup:
-            for t, c in dup.items():
-                print(f"  重复 {c} 次: {t[:60]}")
-        else:
-            print("  无重复")
-        print("=== 结果表 ===")
-        for r in results:
-            print(f"  {r['key']} | {r['number']} | {r['uuid']}")
+        _print_results(ledger, results, ledger_path)
+
+        if args.mode == "fast":
+            pending = [r for r in ledger.pending_inline() if any(x["key"] == r["bug_key"] for x in results)]
+            if pending:
+                print("\nPhase A 已完成。描述内嵌图待补（Phase B，失败不影响单号）：")
+                print(f"  python scripts/ones_submit_defects.py --work-order {args.work_order} "
+                      f"--ledger {ledger_path} --repair-images")
     finally:
         disconnect(pw)
+
+
+def _phase_a_one(page, team, parent, bug, fvs, files, current, scope_uuid, ledger,
+                 skip_evidence=False):
+    """单条缺陷 Phase A：复用账本 → 创建/补关联 → 附件核验。"""
+    key = bug["key"]
+    rec = ledger.get(key)
+    if not rec:
+        same = ledger.find_by_title(bug["title"])
+        if same and same.get("task_uuid"):
+            raise RuntimeError(
+                f"{key} 与账本中 {same.get('bug_key')} 标题相同，疑似重复；"
+                f"已有 #{same.get('number')} uuid={same.get('task_uuid')}，拒绝重复建单"
+            )
+    if rec and rec.get("task_uuid") and rec.get("state") != STATE_CREATED:
+        print(f"  {key} 账本已存在 #{rec.get('number')} uuid={rec['task_uuid']}，跳过创建")
+        number, uuid = rec.get("number"), rec["task_uuid"]
+    elif rec and rec.get("task_uuid") and rec.get("state") == STATE_CREATED:
+        number, uuid = rec.get("number"), rec["task_uuid"]
+        link_task_to_parent(page, team, parent, uuid)
+        ledger.mark(key, STATE_LINKED, number=number, task_uuid=uuid)
+        print(f"  {key} 补关联 #{number} uuid={uuid}")
+    else:
+        rec = ledger.upsert(key, bug["title"], evidence_files=[str(p) for p in files])
+        def _created(number, uuid):
+            ledger.mark(key, STATE_CREATED, number=number, task_uuid=uuid,
+                        evidence_files=[str(p) for p in files])
+            print(f"  {key} 已创建 #{number} uuid={uuid}（先落账，再关联）")
+        number, uuid = create_linked_defect(
+            page, team, parent, bug["title"], fvs,
+            assign=current["uuid"], issue_type_scope_uuid=scope_uuid,
+            on_created=_created,
+        )
+        ledger.mark(key, STATE_LINKED, number=number, task_uuid=uuid)
+        print(f"  {key} 已关联主工单 #{number}")
+
+    done_state = (rec or {}).get("state")
+    if not skip_evidence and done_state not in (STATE_ATTACHED, STATE_INLINE_PENDING,
+                                                STATE_INLINE_OK, STATE_VERIFIED):
+        if files:
+            ok, msg = attach_evidence(page, team, uuid, files)
+            print(f"    附件绑定: {ok} {msg} ({len(files)} 个文件)")
+            if not ok:
+                raise RuntimeError(
+                    f"{key} 已创建并关联 #{number} uuid={uuid}，"
+                    f"但附件未确认，已落账；请勿重复创建，按此 uuid 重试附件"
+                )
+            ledger.mark(key, STATE_ATTACHED, number=number, task_uuid=uuid,
+                        attachment_files=[str(p) for p in files])
+        else:
+            ledger.mark(key, STATE_ATTACHED, number=number, task_uuid=uuid,
+                        attachment_files=[])
+    return {"key": key, "number": number, "uuid": uuid}
+
+
+def _repair_images(page, team, parent, ledger, args):
+    wanted = expand_keys(args.only)
+    if args.bugs:
+        wanted |= expand_keys(args.bugs.split(","))
+    pending = [r for r in ledger.pending_inline()
+               if key_in_wanted(r.get("bug_key"), wanted) and r.get("task_uuid")]
+    if not pending:
+        pending = [r for r in ledger.all()
+                   if key_in_wanted(r.get("bug_key"), wanted)
+                   and r.get("task_uuid")
+                   and r.get("state") in (STATE_INLINE_PENDING, STATE_FAILED)
+                   and (r.get("attachment_files") or r.get("evidence_files"))]
+    if not pending:
+        print("账本中没有待补图的缺陷。")
+        return
+    for rec in pending:
+        key = rec["bug_key"]
+        files = [Path(p) for p in (rec.get("attachment_files") or rec.get("evidence_files") or [])]
+        if not files:
+            ledger.mark(key, STATE_INLINE_OK)
+            print(f"  {key} 无图片证据，标记完成")
+            continue
+        print(f"  {key} #{rec.get('number')} uuid={rec.get('task_uuid')} 补图 {len(files)} 个")
+        ok, msg = inline_description_evidence(
+            page, team, rec.get("task_uuid"), files,
+            timeout=args.inline_timeout, number=rec.get("number"),
+        )
+        print(f"    {ok} {msg}")
+        ledger.mark(key, STATE_INLINE_OK if ok else STATE_FAILED, inline_message=msg)
+    _print_results(ledger, [], Path(args.ledger).expanduser().resolve())
+
+
+def _verify_ledger(page, team, ledger):
+    print("=== 账本校验 ===")
+    bad = 0
+    for rec in ledger.all():
+        key, uuid = rec.get("bug_key"), rec.get("task_uuid")
+        if not uuid:
+            print(f"  {key} | 未创建")
+            bad += 1
+            continue
+        report = verify_task_description_images(page, team, uuid)
+        state = STATE_VERIFIED if report.get("ok") and rec.get("state") in (
+            STATE_INLINE_OK, STATE_VERIFIED) else rec.get("state")
+        if state == STATE_VERIFIED:
+            ledger.mark(key, STATE_VERIFIED)
+        print(f"  {key} | #{rec.get('number')} | {state} | 图片 {report.get('count', 0)} | "
+              f"占位 {len(report.get('placeholder') or [])} | 坏图 {len(report.get('broken') or [])}")
+        if not report.get("ok"):
+            bad += 1
+    print(f"=== 校验完成：{len(ledger.all()) - bad}/{len(ledger.all())} 通过 ===")
+
+
+def _print_results(ledger, results, ledger_path):
+    print("=== 结果表 ===")
+    rows = results or ledger.all()
+    for r in rows:
+        key = r.get("key") or r.get("bug_key")
+        rec = ledger.get(key) or {}
+        print(f"  {key} | #{rec.get('number')} | {rec.get('task_uuid')} | {rec.get('state')}")
+    print(f"账本: {ledger_path}")
 
 
 if __name__ == "__main__":
