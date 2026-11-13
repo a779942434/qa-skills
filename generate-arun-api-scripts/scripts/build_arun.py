@@ -18,7 +18,7 @@
        "body": {...},                # data.body.json 内容；整值透传时写 "$var"
        "setup_code": "...",          # 可选，脚本自动加首行注释
        "teardown_code": "...",       # 可选，脚本自动加首行注释
-       "project": 13,                # 可选，覆盖默认 project
+       "project": "<ARUN_PROJECT>",  # 可选，覆盖配置中的 project
        "json2text": true,            # 可选，写入 data.json2text（整值透传）
        "ignore": false               # 可选
    }
@@ -34,6 +34,7 @@
 import argparse
 import copy
 import json
+import os
 import pathlib
 import re
 import sys
@@ -51,7 +52,7 @@ DUBBO = {
         "group": "",
         "username": "",
         "password": "",
-        "address": "118.31.126.238:21811",
+        "address": "",
         "timeout": 3,
     },
 }
@@ -72,7 +73,7 @@ API_STEP_TOP = {
     "open_api_name": "",
     "method": "POST",
     "locked": False,
-    "project": 13,
+    "project": None,
     "only_self": False,
     "lockor": 0,
     "url": "",
@@ -132,6 +133,73 @@ API_STEP_DATA = {
     "hook": {"setUpHooks": [""], "tearDownHooks": [""]},
 }
 
+MES_ADMIN_PREFIX = "/linkim-pc/admin-console"
+
+DEFAULT_SETTINGS = {
+    "project": "",
+    "dubbo": {
+        "registry_center": {
+            "address": "",
+            "protocol": 1,
+            "timeout": 3,
+        }
+    },
+}
+
+
+def _deep_merge(base, override):
+    out = copy.deepcopy(base)
+    for key, value in (override or {}).items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def load_settings_from_dict(loaded):
+    """把配置字典合并到默认骨架；便于单测和调用方复用。"""
+    if not isinstance(loaded, dict):
+        raise ValueError("settings 必须是对象")
+    return _deep_merge(DEFAULT_SETTINGS, loaded)
+
+
+def load_settings(path=None):
+    """读取本地配置；缺省为空值，环境变量可覆盖。"""
+    settings = copy.deepcopy(DEFAULT_SETTINGS)
+    configured = path or os.environ.get("ARUN_SETTINGS")
+    if configured:
+        settings_path = pathlib.Path(configured).expanduser()
+    else:
+        settings_path = pathlib.Path(__file__).resolve().parent.parent / "config/settings.local.yaml"
+    if settings_path.exists():
+        if yaml is None:
+            raise RuntimeError("读取 settings 需要 pyyaml；或改用环境变量")
+        loaded = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(loaded, dict):
+            raise ValueError("settings 必须是 YAML/JSON 对象")
+        settings = _deep_merge(settings, loaded)
+    if os.environ.get("ARUN_PROJECT"):
+        settings["project"] = os.environ["ARUN_PROJECT"]
+    registry = settings.setdefault("dubbo", {}).setdefault("registry_center", {})
+    if os.environ.get("ARUN_DUBBO_ADDRESS"):
+        registry["address"] = os.environ["ARUN_DUBBO_ADDRESS"]
+    if os.environ.get("ARUN_DUBBO_PROTOCOL"):
+        registry["protocol"] = os.environ["ARUN_DUBBO_PROTOCOL"]
+    if os.environ.get("ARUN_DUBBO_TIMEOUT"):
+        registry["timeout"] = os.environ["ARUN_DUBBO_TIMEOUT"]
+    return settings
+
+
+def normalize_api_url(url):
+    """为 MES 管理端相对业务路径补统一网关前缀，已带前缀或完整 URL 不重复处理。"""
+    if url.startswith("/plan/"):
+        return MES_ADMIN_PREFIX + url
+    if url.startswith("plan/"):
+        return MES_ADMIN_PREFIX + "/" + url
+    return url
+
+
 SET_VAR_RE = re.compile(r"(?:arun|ARun)\.set\(\s*['\"]([^'\"]+)['\"]")
 BODY_VAR_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 
@@ -153,10 +221,10 @@ def find_body_vars(value):
     return found
 
 
-def build_api_step(spec):
+def build_api_step(spec, settings=None):
     name = spec.get("name", "")
     method = str(spec.get("method", "POST")).upper()
-    url = spec.get("url", "")
+    url = normalize_api_url(str(spec.get("url", "")))
     if not name or not url:
         raise ValueError("接口步骤必须有 name 和 url")
 
@@ -170,9 +238,18 @@ def build_api_step(spec):
             "url": url,
         }
     )
-    # 可选覆盖：project（默认 13）、ignore
+    # 可选覆盖：project（默认取本地配置）、ignore
     if "project" in spec:
         step["project"] = spec["project"]
+    elif settings and settings.get("project") not in (None, ""):
+        step["project"] = settings["project"]
+    if settings:
+        registry = ((settings.get("dubbo") or {}).get("registry_center") or {})
+        data["dubbo"]["registry_center"].update({
+            "address": registry.get("address", ""),
+            "protocol": registry.get("protocol", 1),
+            "timeout": registry.get("timeout", 3),
+        })
     if "ignore" in spec:
         step["ignore"] = spec["ignore"]
     data.update(
@@ -212,7 +289,7 @@ def build_script_step(spec):
     return step
 
 
-def build_controller_step(spec):
+def build_controller_step(spec, settings=None):
     controller = spec.get("controller")
     if controller not in ("for", "if"):
         raise ValueError(f"未知 controller: {controller}（仅支持 for / if）")
@@ -221,29 +298,29 @@ def build_controller_step(spec):
         if key in ("controller", "steps", "elif_branches", "else_steps"):
             continue
         step[key] = copy.deepcopy(value)
-    step["steps"] = build_steps(spec.get("steps", []))
+    step["steps"] = build_steps(spec.get("steps", []), settings=settings)
     # elif_branches / else_steps 是 if 专属字段，for 步骤不注入，避免污染 for 控制器
     if controller == "if":
         elif_branches = []
         for br in spec.get("elif_branches", []):
             branch = copy.deepcopy(br) if isinstance(br, dict) else br
             if isinstance(branch, dict) and "steps" in branch:
-                branch["steps"] = build_steps(branch["steps"])
+                branch["steps"] = build_steps(branch["steps"], settings=settings)
             elif_branches.append(branch)
         step["elif_branches"] = elif_branches
-        step["else_steps"] = build_steps(spec.get("else_steps", []))
+        step["else_steps"] = build_steps(spec.get("else_steps", []), settings=settings)
     return step
 
 
-def build_steps(specs):
+def build_steps(specs, settings=None):
     steps = []
     for spec in specs:
         if "controller" in spec:
-            steps.append(build_controller_step(spec))
+            steps.append(build_controller_step(spec, settings=settings))
         elif "script" in spec:
             steps.append(build_script_step(spec))
         else:
-            steps.append(build_api_step(spec))
+            steps.append(build_api_step(spec, settings=settings))
     return steps
 
 
@@ -282,7 +359,8 @@ def load_spec(path):
         text = sys.stdin.read()
         data = json.loads(text)
     else:
-        text = open(path, "r", encoding="utf-8").read()
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
         if path.endswith((".yaml", ".yml")) and yaml is not None:
             data = yaml.safe_load(text)
         else:
@@ -293,7 +371,7 @@ def load_spec(path):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(prog="build_arun.py", description=__doc__)
     parser.add_argument("spec", help="步骤清单 JSON/YAML 文件路径")
     parser.add_argument("-o", "--output", help="输出 JSON 文件路径；缺省输出到 ~/Desktop/<步骤名>_arun.json，传 - 时输出到 stdout")
     parser.add_argument(
@@ -301,10 +379,28 @@ def main(argv=None):
         action="store_true",
         help="输出紧凑 JSON（省体积），默认 pretty",
     )
+    parser.add_argument("--settings", help="本地配置 YAML 路径（也可用 ARUN_SETTINGS）")
+    parser.add_argument("--project", help="覆盖 ARun project ID（也可用 ARUN_PROJECT）")
+    parser.add_argument("--dubbo-address", help="覆盖 Dubbo registry 地址（也可用 ARUN_DUBBO_ADDRESS）")
     args = parser.parse_args(argv)
 
+    settings = load_settings(args.settings)
+    if args.project:
+        settings["project"] = args.project
+    if args.dubbo_address:
+        settings.setdefault("dubbo", {}).setdefault("registry_center", {})["address"] = args.dubbo_address
+    registry = ((settings.get("dubbo") or {}).get("registry_center") or {})
+    if settings.get("project") in (None, ""):
+        parser.error("缺少 project：复制 config/settings.example.yaml 为 settings.local.yaml 后填写，或设置 ARUN_PROJECT")
+    if not registry.get("address"):
+        parser.error("缺少 Dubbo registry 地址：填写 config/settings.local.yaml，或设置 ARUN_DUBBO_ADDRESS")
+    try:
+        settings["project"] = int(settings["project"])
+    except (TypeError, ValueError):
+        pass
+
     specs = load_spec(args.spec)
-    steps = build_steps(specs)
+    steps = build_steps(specs, settings=settings)
 
     problems = validate_vars(specs)
     if problems:

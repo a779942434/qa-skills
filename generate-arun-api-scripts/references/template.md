@@ -21,7 +21,7 @@
   "open_api_name": "",
   "method": "POST",
   "locked": false,
-  "project": 13,
+  "project": "__PROJECT_ID__",
   "only_self": false,
   "lockor": 0,
   "url": "__接口路径__",
@@ -47,7 +47,7 @@
         "group": "",
         "username": "",
         "password": "",
-        "address": "118.31.126.238:21811",
+        "address": "__DUBBO_REGISTRY__",
         "timeout": 3
       }
     },
@@ -155,7 +155,7 @@
 | 字段 | 默认值 |
 | --- | --- |
 | `api_type` / `apiType` | `1` |
-| `project` | `13` |
+| `project` | 本地配置必填 |
 | `origin` | `1` |
 | `body_type` | `"json"` |
 | `method` | Swagger 提供值，缺省 `POST` |
@@ -166,7 +166,7 @@
 | `verify` | `false` |
 | `jsonschemaOpen` | `true` |
 | `jsonschemaUpdate` | `false` |
-| `dubbo.registry_center.address` | `118.31.126.238:21811` |
+| `dubbo.registry_center.address` | 本地配置必填 |
 | `dubbo.registry_center.protocol` | `1` |
 | `dubbo.registry_center.timeout` | `3` |
 

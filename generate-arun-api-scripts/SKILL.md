@@ -24,7 +24,7 @@ ARun 平台的步骤数组 JSON，数组元素是「纯脚本步骤」或「接�
 - **模式二**：接口文档 + 自述业务流。最低可执行输入 = 每个接口的 URL/method/请求体参数（必填/可选/类型）/响应关键字段 + 调用顺序 + 每个变量来源（前一步提取 / `setup_code` 计算 / 流程显式给值 / 基础数据提取）。
 - **模式三（需反问一次）**：用户只给意图时，先按最小问题清单反问（接口文档在哪？对哪个实体做哪些操作？）再生成。
 
-信息缺失时兜底不脑补：缺方法默认 `POST`；缺响应提取路径只生成流程显式要求的提取，不猜字段名；必填来源不明保留 `$fieldName` 并列「待确认/需造数」；缺环境参数沿用样本默认值（见 `references/template.md`）。
+信息缺失时兜底不脑补：缺方法默认 `POST`；缺响应提取路径只生成流程显式要求的提取，不猜字段名；必填来源不明保留 `$fieldName` 并列「待确认/需造数」；环境参数缺配置时报错，不用样本内网默认值。
 
 ## 业务流模板（一句话展开，默认优先）
 
@@ -61,15 +61,17 @@ ARun 平台的步骤数组 JSON，数组元素是「纯脚本步骤」或「接�
    - 脚本步骤：`{"script": "<python>", "name": "<名称>"}`。
    - 接口步骤：按 references/template.md 的完整字段复制，省略平台自增/审计字段。
 5. 输出前做自查：JSON 可解析、每个接口步骤含完整 `data`、`body.json` 中每个 `$var` 有来源或被列入待确认清单。
+   - 所有 MES 相对 URL 已补 `/linkim-pc/admin-console/`，且没有重复前缀。
 
 ## 字段与变量规则（不可自行变更）
 
 - **接口步骤字段**：完整复制 `references/template.md`，省略 `id`、`updator`、`creator`、`case_id`、`created`、`updated`、`locked_time`、`owner_id`。
-- **默认值**：`api_type=1`、`project=13`、`origin=1`、`body_type="json"`、`loop=true`、`ssl=false`、`delay=0`、`cycles=1`、`verify=false`、`jsonschemaOpen=true`、`jsonschemaUpdate=false`。
-- **Dubbo 默认值**：`registry_center.address=118.31.126.238:21811`、`protocol=1`、`timeout=3`；接口相关字段留空。
+- **固定默认值**：`api_type=1`、`origin=1`、`body_type="json"`、`loop=true`、`ssl=false`、`delay=0`、`cycles=1`、`verify=false`、`jsonschemaOpen=true`、`jsonschemaUpdate=false`。
+- **环境配置**：`project` 与 `dubbo.registry_center.address` 必须从 `config/settings.local.yaml`（复制 `settings.example.yaml` 后填写）或 `ARUN_PROJECT` / `ARUN_DUBBO_ADDRESS` 读取；缺配置时报错，不生成内网地址。
 - **空占位结构**：`params`、`headers`、`retrying`、`variables`、`extract` 各一条 `{"checked": true, ...空值}`；`form_data`、`form_urlencoded` 各一条；`check` 一条空校验；`hook` 两侧空数组。
 - **`setup_code`**：固定以 `# python 请求之前执行` 开头，随后生成随机数、时间或基础数据提取。
 - **`teardown_code`**：固定以 `# python 请求之后执行` 开头，随后用 `res.json()['data']...` 提取并 `arun.set(...)`；业务断言用 `assert 条件, '中文失败提示'`。
+- **MES 网关 URL 前缀**：MES 管理端接口统一使用 `/linkim-pc/admin-console/` 前缀。OpenAPI/curl 只给业务路径（如 `/plan/sub-order-split/page`）时，ARun `url` 必须补成 `/linkim-pc/admin-console/plan/sub-order-split/page`；已带该前缀或为完整 `http(s)://` URL 时不得重复拼接。
 - **请求体**：写在 `body.json`，变量一律 `$var` 引用。变量来源只允许：前一步提取、`setup_code` 计算、流程显式给值、基础数据提取。
 - **前置造数**：仅当需要基础数据时生成 `{"script": ..., "name": "通用数据获取"}`，用 `ARun.meta_data.get_env_base_test_data()` 与 `ARun.meta_data.get_key_value(jsonpath)` 提取。
 
@@ -94,7 +96,7 @@ ARun 平台的步骤数组 JSON，数组元素是「纯脚本步骤」或「接�
 步骤较多时，不要逐条输出完整接口字段骨架。统一走「紧凑步骤清单 + 自动跑脚本」：
 
 1. 输出一份步骤清单 `steps.json`（JSON 数组），每个元素只写：
-   - 接口步骤：`name` / `url` / `method`（默认 POST）/ `body` / `setup_code` / `teardown_code`，可加 `project`（覆盖默认 13）/ `json2text`（整值透传）/ `ignore`
+   - 接口步骤：`name` / `url` / `method`（默认 POST）/ `body` / `setup_code` / `teardown_code`，可加 `project`（覆盖本地配置）/ `json2text`（整值透传）/ `ignore`
    - 脚本步骤：`name` / `script`
    - 控制流步骤：`{"controller":"for"|"if","steps":[...],其余控制器字段原样}`（可嵌套上面两种）
 2. 跑脚本生成完整 JSON：`python3 generate-arun-api-scripts/scripts/build_arun.py steps.json`

@@ -33,6 +33,7 @@ description: >-
 2. **配环境**：`export MES_URL=... MES_ACCOUNT=... MES_PASSWORD=...`（总表见 `scripts/qa_skill_common/references/environment.md`）。
 3. **开跑**：复制 `scripts/run_all_template.py` 到 `<run-dir>/run_all.py`，改 `CONFIG`/`CASES` 后
    `python scripts/qa_case.py run --spec <run-dir>/run_all.py`——**一批一次调用**；探索单步才用 `exec`。
+   标准/深度模式可直接 `python scripts/qa_case.py init ... --with-runner` 生成 runner。
 
 > 平台不限；浏览器用本机 Chrome/Edge/Chromium（`MES_BROWSER_PATH` 可指定），依赖只装 `pip install playwright pyyaml`。
 >
@@ -43,7 +44,7 @@ description: >-
 
 ### A. 红线（违反任一 = 本轮执行失败）
 
-1. **只做标准用户操作**（点击/键入/下拉）：禁止 JS 注入改值、改 DOM/属性绕过校验、对 disabled 强填、改遮挡层级；不可行记「待确认/环境观察」，不许硬绕。
+1. **只做标准用户操作**（点击/键入/下拉）：执行动作禁止 JS 注入改值、改 DOM/属性绕过校验、对 disabled 强填、改遮挡层级；判定允许只读 API/DB/网络观测（`oracle_mode=api/db`），但禁止编辑。不可行记「待确认/环境观察」，不许硬绕。
 2. **禁止下载浏览器**：只用本机系统 Chrome/Edge/Chromium；不执行 `playwright install`。
 3. **仅 Python 后台专用运行**：只允许 Python Playwright 无头长脚本；禁止 Playwright MCP 与 `browser_*`。必须用专用独立 profile，不得连日常 Chrome/Edge、现有标签页或 ONES CDP 9334；同一时间只允许一个任务持有。仅用户明确要求可见窗口时才前台。**共享 CDP 只操作自建 page**，禁止 `close()` 非本会话页面。
 4. **不脑补**：需求/接口/字段没有的一律不编造；必填来源不明标「待确认/需造数」。
@@ -56,7 +57,7 @@ description: >-
 ### B. 默认做法（可自行决定，不必逐一确认）
 
 1. **复用固化脚本**：登录/导航用 `qa_skill_common`（`login_for_page`/`goto`），侦察用 `recon-generic/recon_page.py`，造数用 `bbt_osd_setup.py`，提缺陷用 `ones_submit_defects.py`；确有缺口才扩展，不写平行替代。
-2. **一次会话跑完**：一次登录 + 一个总入口长脚本串行跑完全部用例，不按用例反复起浏览器/登录。
+2. **一次会话跑完**：一个持久会话 + 一次登录 + 一个 runner；runner 内部分批/可 `--resume`，禁止一条用例一次 `exec`，不按用例反复起浏览器/登录。
 3. **等待优先级**：接口/响应绑定等待 > 条件等待 > 固定 sleep（仅 ≤500ms 渲染余量/首次侦察兜底）。
 4. **失败分级**：接口 5xx/超时 = 环境观察，跳过不重试；页面明确报错 = 业务失败，重试 ≤1 次后进缺陷清单。**校验被拦截（有 toast/内联错误）= 已处理业务拦截，记「通过/已拦截」≠ 失败**。
 5. **侦察纪律**：同一页面侦察 ≤2 次；固化必须含**直达 URL**，入口一律 `goto(直达URL)` 不重走菜单；goto 后被重定向说明前置没做（未解锁/未选站），先补前置。
@@ -80,46 +81,24 @@ description: >-
 
 ## 执行形态（单会话 + 批次闭环 + 检查点恢复）
 
-**一个任务 = 一个持久会话 + 一次登录 + 分批次执行 + 检查点恢复。**
+**一个任务 = 持久会话 + 一次登录 + 一个 runner，内部分批可恢复。**
 
 ```bash
-python scripts/qa_case.py exec  --steps steps.json --run-dir <run-dir> --label C07  # 探索性动作序列
-python scripts/qa_case.py run   --spec <run-dir>/run_all.py --resume              # 跑一批用例
-python scripts/qa_case.py status --run-dir <run-dir>                              # 一行摘要
-python scripts/qa_case.py report --run-dir <run-dir>                              # 由状态重渲染报告
-python scripts/qa_case.py pages  --url <URL> --feature <功能名>                    # 查站点注册表
+python scripts/qa_case.py run  --spec <run-dir>/run_all.py --resume
+python scripts/qa_case.py exec --steps steps.json --run-dir <run-dir> --label C07
+python scripts/qa_case.py report --run-dir <run-dir>
 ```
 
-- **一次调用跑一批**，禁止一条用例一次调用；`run` 重跑带 `--resume`（`exec` 无 resume，重跑先确认幂等）。实测 65% 的轮次花在「写脚本→跑→读错→改→重跑」上，这是最大的一项提速。
-- stdout 只回**单行 JSON 摘要（≤4KB）**；完整现场落 `<run-dir>/cases/<label>.json`，要细节再读该文件。
-- 持久 MES Edge 用独立 profile + CDP 9222；启动前查 `/json/version` + `/json/list`；假死重启后 `--resume` 续跑。
-- 分层超时：动作 5s / 导航 15s / 异步查询 15s / 导入下载 45s（禁止回落默认 30s）。业务完成用 `ApiWatcher.wait_action()` 按 URL+method+body 匹配；表单字段用 `visible_form_item()` 限定可见页签/弹窗；收尾用 `close_surface_stack()`。
-- 失败只抓一次 `capture_failure_context` 并**打印其 `summary`**（判据完整、观察限长），禁止反复白等。细节见 [references/playwright-strategy.md](references/playwright-strategy.md)。
+- 一次调用跑一批；stdout 回单行 JSON（≤4KB），详情落 `<run-dir>/cases/`。
+- Edge 用独立 profile；恢复后 `--resume`。等待、超时和失败现场规则见 [references/playwright-strategy.md](references/playwright-strategy.md)。
 
-## 跨会话复用（注册表 + 两级可信度）
+## 工作流选择与执行（按需看 workflow.md）
 
-- **复跑/回归**先 `pages --url <URL>`（不带 `--feature` 列全站，0 条=全站新）：命中 `verified` 才可直接 goto；**全新功能直接侦察、不查**。
-- **两级可信度**：验证可达且落到目标页 → `verified:true`；仅观测到（如报错后的中间页）→ `verified:false`，只作线索，仍走 `goto_feature` 并按结果回写。
-- **一致性校验**：命中 verified 并 goto 后校验「标题归一化一致」或「组件库判定一致且为已知库」；不一致自动标 `stale`、降级并回退重侦察。
-- 反复测的页面侦察后 `--save-fingerprint <host>#<功能名>` 固化指纹，改版用 `--diff` 看差异。
-- **用例复用**：同一功能在 `knowledge-base/test-cases/` 已有用例时默认**复用 + 差量更新**（先 diff 需求点 R-01…），不重新全量生成；回归/补测复用上一轮用例表。
+- 标准功能测/深度专项测必须调 `$generate-manufacturing-test-cases`，不得自行手写；快速核心流仅用于用户明确要求且无完整需求的冒烟。
+- 复跑/回归先 `pages` 查注册表，只有 `verified` 才直接 goto；全新功能直接侦察。
+- 用例执行统一走 `qa_case.py`；一次登录、一个 runner、内部分批并可 `--resume`。
 
-## 快速分层
-
-给了完整 PRD/需求文档/流程图，或用户说「按需求测 / 标准测试」，一律走**标准功能测**（涉导入导出/金额库存/权限/上线前回归则**深度专项测**），且**必须**调 `$generate-manufacturing-test-cases` 出用例表，不得自行手写。**快速核心流**仅在用户明确要求快速冒烟且未给完整需求时用。
-
-| 模式 | 适用 | 执行范围 | 交付物 |
-| --- | --- | --- | --- |
-| 快速核心流 | 明确要求快速冒烟且无完整需求 | 1 条主链路 + 关键校验 + 明显缺陷 | 简版报告 + 缺陷清单 |
-| 标准功能测 | 有需求文档 / 要求「按需求测」 | 核心流、异常、筛选、状态、导入导出基础 | 用例与结果 + 缺陷清单 + 总结 |
-| 深度专项测 | 上线前 / 导入导出 / 金额库存 / 权限 / 兼容 | 边界值、组合筛选、数据一致性、回归专项 | 完整计划、用例、证据、报告 |
-
-## 用例生成与执行
-
-1. 把需求输入**完整**交给 `$generate-manufacturing-test-cases`，指定颗粒度，拿八列用例表。
-2. 核对每条前置条件能否造数；按 P0 → P1 → P2 执行；造不出数据先向用户要。
-3. 逐条执行（共用一次登录，统一走 `qa_case.py`）并挂错误监听；失败用例截图后按缺陷格式转入缺陷清单。
-4. 结果写回用例表并归档 `<产物根>/knowledge-base/test-cases/`。
+执行模式、注册表可信度和用例复用细节见 [references/workflow.md](references/workflow.md)。
 
 ## 报告与缺陷（一次成型）
 
