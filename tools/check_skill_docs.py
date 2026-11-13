@@ -18,6 +18,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_SKILL = ROOT / "web-blackbox-testing/SKILL.md"
+ADVERSARIAL_SKILL = ROOT / "web-adversarial-testing/SKILL.md"
+WORKFLOW_REF = ROOT / "web-blackbox-testing/references/workflow.md"
 QA_COMMON = ROOT / "qa_skill_common"
 README = QA_COMMON / "README.md"
 # 包初始化文件没有独立职责，不进模块表
@@ -93,6 +95,21 @@ def check_module_index():
     return problems
 
 
+def check_adversarial_anchors():
+    """对抗性技能必须明确探索性边界，且主技能有入口。"""
+    if not ADVERSARIAL_SKILL.exists():
+        return ["缺少 web-adversarial-testing/SKILL.md"]
+    problems = []
+    text = ADVERSARIAL_SKILL.read_text(encoding="utf-8")
+    for marker in ("不计入需求覆盖", "只读 Oracle", "implementation_defect",
+                   "requirement_risk", "test_artifact"):
+        if marker not in text:
+            problems.append("对抗性技能缺少锚点: {}".format(marker))
+    if "web-adversarial-testing" not in WORKFLOW_REF.read_text(encoding="utf-8"):
+        problems.append("web-blackbox-testing 未提供对抗性技能入口")
+    return problems
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -132,6 +149,8 @@ def main(argv=None):
         problems.extend(idx)
     elif args.verbose:
         print("模块索引: ✓ 与 qa_skill_common 一致")
+
+    problems.extend(check_adversarial_anchors())
 
     if problems:
         print("\n✗ 文档闸门未通过：")

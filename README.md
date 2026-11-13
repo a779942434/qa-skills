@@ -9,6 +9,7 @@
 | --- | --- | --- |
 | `generate-manufacturing-test-cases/` | 制造类测试用例生成 | 基于 PRD / 流程图 / 补充规则生成结构化功能测试用例 |
 | `web-blackbox-testing/` | Web 黑盒测试 | 无源码场景下黑盒测试 / 冒烟 / 回归验证，产出缺陷清单 |
+| `web-adversarial-testing/` | 对抗性测试补充 | 标准用例之外的并发、幂等、状态迁移和上线前风险探索 |
 | `ones-create-linked-defect/` | ONES 缺陷全流程 | 把缺陷清单录入 ONES、回归后关闭 / 评论 @处理人、流转主工单 |
 | `qa_skill_common/` | 跨技能公共实现（开发源） | 唯一来源；由 `vendor-common.sh` 内置到各技能，不单独分发 |
 | `generate-arun-api-scripts/` | ARun 接口脚本生成 | 从 OpenAPI/Swagger + 业务流程生成可粘贴到 ARun 的接口脚本 JSON |
@@ -25,6 +26,7 @@
 
 ```bash
 cp -R web-blackbox-testing ~/.codex/skills/
+cp -R web-adversarial-testing ~/.codex/skills/
 cp -R ones-create-linked-defect ~/.codex/skills/
 cp -R generate-manufacturing-test-cases ~/.codex/skills/
 cp -R generate-arun-api-scripts ~/.codex/skills/
@@ -32,10 +34,11 @@ cp -R generate-arun-api-scripts ~/.codex/skills/
 
 - `web-blackbox-testing`、`ones-create-linked-defect` 内已内置公共实现包（`scripts/qa_skill_common/`），**单独装其中一个也能跑**。
 - 仓库根的 `qa_skill_common/` 是**开发源**，不随技能分发；改动后由 `./vendor-common.sh` 生成到各技能（见下）。
+- `generate-arun-api-scripts` 首次使用先复制 `config/settings.example.yaml` 为 `config/settings.local.yaml`，填写当前环境的 `project` 与 Dubbo registry 地址；缺配置时不会生成内网默认地址。
 
-## 同步到 Codex 技能库（必做）
+## 同步到运行时技能库（必做）
 
-Codex 实际加载 `~/.codex/skills/` 下的独立副本，与仓库**不同步**。改完仓库后执行一次即可让 Codex 用上新版本：
+Codex 通常加载 `~/.codex/skills/`，DSH/其他运行时可能加载 `~/.agents/skills/`；两处都是独立副本，与仓库**不同步**。改完仓库后执行一次即可同时更新两个根：
 
 ```bash
 ./sync-skills.sh            # 正式同步
@@ -44,16 +47,17 @@ Codex 实际加载 `~/.codex/skills/` 下的独立副本，与仓库**不同步*
 ./sync-skills.sh --dry-run --purge  # 先预览将删除的文件
 ```
 
-- 同步目录：`web-blackbox-testing/`、`ones-create-linked-defect/`、`generate-manufacturing-test-cases/`、`generate-arun-api-scripts/`（各技能已自带公共包）
-- 保留目标侧本地文件（如 `scripts/config/databases.yaml`），不会误删；目标目录可用 `CODEX_SKILLS_DIR` 覆盖
-- 需要沙箱外权限（写入 `~/.codex/skills`）
+- 同步目录：`web-blackbox-testing/`、`web-adversarial-testing/`、`ones-create-linked-defect/`、`generate-manufacturing-test-cases/`、`generate-arun-api-scripts/`（有脚本的技能已自带公共包）
+- 保留目标侧本地文件（如 `scripts/config/databases.yaml`），不会误删；默认同步 `~/.codex/skills` 与 `~/.agents/skills`
+- 可用 `--target <dir>` 指定根，或用 `SKILL_SYNC_TARGETS` / `CODEX_SKILLS_DIR` 覆盖默认值
+- 仅供兼容旧用法时，`CODEX_SKILLS_DIR` 仍可指定单一目标；写入这些目录可能需要沙箱外权限
 
 ## 提速底座与闸门（2026-09-22）
 
 实测会话成本 ≈ `轮次 × 平均 context`：大富会话 347 轮 / 84.47M 输入（缓存 99.7%），
 其中 **65% 的轮次花在脚本往返、85% 的 context 增长来自工具输出**。为此加了三条底座：
 
-- **单用例/批次闭环**：`python scripts/qa_case.py exec|run|status|report|pages`
+- **单用例/批次闭环**：`python3 web-blackbox-testing/scripts/qa_case.py exec|run|status|report|pages`
   —— 一次调用跑一批、stdout 只回单行 JSON（≤4KB），完整现场落 `<run-dir>/cases/`。
 - **输出限长契约**：`qa_skill_common/output.py` 的 `emit()`。**判定字段永不截断**
   （截断会把「有 toast 的拦截」误判成「静默无反馈」，历史上真出过这个误报）；
@@ -78,7 +82,8 @@ python3 tools/check_skill_docs.py            # 断言红线条数 + 每条动作
 新标准功能测/深度专项测使用一个需求一个运行包：
 
 ```bash
-python3 web-blackbox-testing/scripts/qa_case.py init --run-dir runs/<run> --feature <功能> --mode standard --requirement <需求号>
+python3 web-blackbox-testing/scripts/qa_case.py init --run-dir runs/<run> --feature <功能> --mode standard --requirement <需求号> --with-runner
+python3 web-blackbox-testing/scripts/qa_case.py init --run-dir runs/<run> --feature <功能> --mode standard --from-cases cases.json
 python3 web-blackbox-testing/scripts/qa_case.py run --spec runs/<run>/run_all.py
 python3 web-blackbox-testing/scripts/qa_case.py audit --run-dir runs/<run> --strict
 python3 web-blackbox-testing/scripts/qa_case.py report --run-dir runs/<run>

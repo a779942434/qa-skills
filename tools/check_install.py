@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILLS = ("web-blackbox-testing", "ones-create-linked-defect",
+SKILLS = ("web-blackbox-testing", "web-adversarial-testing", "ones-create-linked-defect",
           "generate-manufacturing-test-cases", "generate-arun-api-scripts")
 # 每个技能至少要能启动的入口；没有就跳过，不把“无脚本技能”判失败。
 ENTRYPOINTS = {

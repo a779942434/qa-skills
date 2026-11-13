@@ -22,7 +22,7 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 仓库中需要同步的技能目录（按需增删）
-SYNC_DIRS=(web-blackbox-testing ones-create-linked-defect generate-manufacturing-test-cases generate-arun-api-scripts)
+SYNC_DIRS=(web-blackbox-testing web-adversarial-testing ones-create-linked-defect generate-manufacturing-test-cases generate-arun-api-scripts)
 
 DRY_RUN=0
 PURGE=0
