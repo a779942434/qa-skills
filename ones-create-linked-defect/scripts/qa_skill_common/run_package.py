@@ -122,12 +122,14 @@ def init_run_package(
     run_id: str = "",
     environment: dict | None = None,
 ) -> dict[str, Any]:
-    """初始化运行包；默认拒绝覆盖已有文件。"""
+    """初始化运行包；默认只补缺失文件，不覆盖已有状态。
+
+    ``force=True`` 才会把标准包文件重置为初始值。这样 ``qa_case init``
+    可以安全地重复执行，后续新增 runner/cases 也不会冲掉已有检查点。
+    """
     paths = package_paths(run_dir)
     existing = [key for key in ("manifest", "contract", "coverage", "evidence", "defects")
                 if paths[key].exists()]
-    if existing and not force:
-        raise FileExistsError("运行包已存在: " + ", ".join(existing))
     req_refs = [str(x).strip() for x in (requirements or []) if str(x).strip()]
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -171,11 +173,42 @@ def init_run_package(
     evidence = {"schema_version": SCHEMA_VERSION, "items": []}
     defects = {"schema_version": SCHEMA_VERSION, "defects": []}
 
-    _write_json(paths["manifest"], manifest)
-    _write_json(paths["contract"], contract)
-    _write_json(paths["coverage"], coverage)
-    _write_json(paths["evidence"], evidence)
-    _write_json(paths["defects"], defects)
+    defaults = {
+        "manifest": manifest,
+        "contract": contract,
+        "coverage": coverage,
+        "evidence": evidence,
+        "defects": defects,
+    }
+    for key, payload in defaults.items():
+        if force or not paths[key].exists():
+            _write_json(paths[key], payload)
+
+    # 已存在包也允许追加新的需求引用；不重置 contract/coverage。
+    if existing and not force:
+        manifest_path = paths["manifest"]
+        contract_path = paths["contract"]
+        manifest_now = _read_json(manifest_path, {})
+        contract_now = _read_json(contract_path, {"requirements": [], "decisions": []})
+        manifest_refs = [str(x) for x in (manifest_now.get("requirement_refs") or [])]
+        changed = False
+        for ref in req_refs:
+            if ref not in manifest_refs:
+                manifest_refs.append(ref)
+                changed = True
+        if changed:
+            manifest_now["requirement_refs"] = manifest_refs
+            _write_json(manifest_path, manifest_now)
+        reqs = list(contract_now.get("requirements") or [])
+        known = {str(x.get("id") or "") for x in reqs}
+        for ref in req_refs:
+            if ref not in known:
+                reqs.append({"id": ref, "source": ref, "quote": "",
+                             "status": "undefined", "case_ids": []})
+                changed = True
+        if changed:
+            contract_now["requirements"] = reqs
+            _write_json(contract_path, contract_now)
     paths["evidence"].parent.mkdir(parents=True, exist_ok=True)
     return {
         "run_dir": str(paths["run_dir"]),
@@ -185,6 +218,112 @@ def init_run_package(
         "evidence": str(paths["evidence"]),
         "defects": str(paths["defects"]),
     }
+
+
+def _refs(value: Any) -> list[str]:
+    """把 requirement_refs / requirement 统一成去重字符串列表。"""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, dict):
+        values = [value.get("id") or value.get("requirement_ref") or ""]
+    else:
+        values = list(value)
+    out: list[str] = []
+    for item in values:
+        ref = str(item or "").strip()
+        if ref and ref not in out:
+            out.append(ref)
+    return out
+
+
+def normalize_case_record(record: dict[str, Any]) -> dict[str, Any]:
+    """统一 exec / cases.json / coverage 的用例字段。"""
+    item = dict(record or {})
+    case_id = str(item.get("id") or item.get("case_id") or "").strip()
+    if not case_id:
+        raise ValueError("用例缺少 id")
+    item["id"] = case_id
+    item["priority"] = str(item.get("priority") or "P2").upper()
+    refs = item.get("requirement_refs")
+    if refs is None:
+        refs = item.get("requirements")
+    if refs is None:
+        refs = item.get("requirement")
+    if refs is None:
+        refs = item.get("requirement_ref")
+    if refs is None:
+        refs = item.get("需求点")
+    item["requirement_refs"] = _refs(refs)
+    invs = item.get("invariant_ids")
+    if invs is None:
+        invs = item.get("invariants")
+    item["invariant_ids"] = _refs(invs)
+    item["oracle_mode"] = str(item.get("oracle_mode") or "ui").lower()
+    item.setdefault("evidence_required", True)
+    item.setdefault("status", "未执行")
+    return item
+
+
+def upsert_case(run_dir: str | Path, case: dict[str, Any], *, force: bool = False) -> dict[str, Any]:
+    """把用例写入 coverage，并同步 contract 的 requirement -> case_ids 映射。
+
+    ``force=False`` 用于 init/导入：只补缺失字段，不覆盖已执行状态。
+    ``force=True`` 用于 exec 回写：更新状态、证据和备注，但需求引用仍做并集，
+    避免一次 ad-hoc 执行把原有用例的覆盖关系冲掉。
+    """
+    paths = package_paths(run_dir)
+    item = normalize_case_record(case)
+    if not paths["coverage"].exists():
+        init_run_package(run_dir, "ad-hoc", mode="quick",
+                         requirements=item["requirement_refs"])
+    coverage = _read_json(paths["coverage"], {
+        "schema_version": SCHEMA_VERSION, "cases": [], "invariants": [], "exclusions": [],
+    })
+    cases = list(coverage.get("cases") or [])
+    old = next((x for x in cases if str(x.get("id") or "") == item["id"]), None)
+    if old is None:
+        merged = item
+        cases.append(merged)
+    else:
+        merged = dict(old)
+        for key, value in item.items():
+            if key == "requirement_refs":
+                merged[key] = _refs(list(merged.get(key) or []) + list(value or []))
+            elif key == "invariant_ids":
+                merged[key] = _refs(list(merged.get(key) or []) + list(value or []))
+            elif key == "evidence_ids":
+                merged[key] = _refs(list(merged.get(key) or []) + list(value or []))
+            elif force or key not in merged or merged.get(key) in (None, "", []):
+                merged[key] = value
+        for idx, current in enumerate(cases):
+            if str(current.get("id") or "") == item["id"]:
+                cases[idx] = merged
+                break
+    coverage["cases"] = cases
+    _write_json(paths["coverage"], coverage)
+
+    contract = _read_json(paths["contract"], {
+        "schema_version": SCHEMA_VERSION, "requirements": [], "decisions": [],
+    })
+    requirements = list(contract.get("requirements") or [])
+    by_id = {str(req.get("id") or ""): req for req in requirements}
+    for ref in merged.get("requirement_refs") or []:
+        req = by_id.get(ref)
+        if req is None:
+            req = {"id": ref, "source": ref, "quote": "", "status": "defined", "case_ids": []}
+            requirements.append(req)
+            by_id[ref] = req
+        elif str(req.get("status") or "").lower() in ("", "undefined"):
+            req["status"] = "defined"
+        ids = list(req.get("case_ids") or [])
+        if item["id"] not in ids:
+            ids.append(item["id"])
+        req["case_ids"] = ids
+    contract["requirements"] = requirements
+    _write_json(paths["contract"], contract)
+    return merged
 
 
 def load_package(run_dir: str | Path) -> dict[str, Any]:

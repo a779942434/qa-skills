@@ -81,6 +81,7 @@ export MES_BROWSER_PATH="/usr/bin/google-chrome"
 | 缺陷清单 | `<产物根>/bug-reports/YYYY-MM-DD_功能名_缺陷清单.md` |
 | 证据截图 | `<产物根>/bug-reports/<功能>/` |
 | 归档 | `<产物根>/knowledge-base/{test-reports,bug-reports,test-cases,notes}/` |
+| 标准运行包 | `<产物根>/runs/<日期_功能>/` |
 
 产物根解析：`$QA_WORKSPACE` → 向上找 `.qa-workspace` / `.git` → 否则 `~/.codex/qa-workspace`。
 > 从**公共包位置**推导（不用 cwd），所以两个技能在同一台机器上得到同一个根，与当前目录、安装方式无关。

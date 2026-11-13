@@ -7,6 +7,7 @@
 """
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -20,6 +21,7 @@ if str(ROOT) not in sys.path:
 
 from qa_skill_common import case_cli as C                    # noqa: E402
 from qa_skill_common import page_registry as REG              # noqa: E402
+from qa_skill_common import run_package as RP                 # noqa: E402
 from qa_skill_common.phase_runner import RunState             # noqa: E402
 
 
@@ -78,7 +80,7 @@ class TestReport(unittest.TestCase):
 
     def test_report_renders_from_structured_data(self):
         self._seed()
-        rc, out = _call(["report", "--run-dir", str(self.run_dir)])
+        rc, out = _call(["report", "--run-dir", str(self.run_dir), "--allow-legacy"])
         payload = json.loads(out)
         self.assertEqual(rc, 0)
         text = Path(payload["report"]).read_text(encoding="utf-8")
@@ -91,12 +93,12 @@ class TestReport(unittest.TestCase):
     def test_report_is_idempotent_on_data_change(self):
         """只改结论数据再重渲染 —— 不手写 markdown。"""
         self._seed()
-        _call(["report", "--run-dir", str(self.run_dir)])
+        _call(["report", "--run-dir", str(self.run_dir), "--allow-legacy"])
         p = self.run_dir / "conclusions.json"
         data = json.loads(p.read_text(encoding="utf-8"))
         data["结论"] = ["结论已更新：零件委外仍未修复（P1）"]
         p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        rc, out = _call(["report", "--run-dir", str(self.run_dir)])
+        rc, out = _call(["report", "--run-dir", str(self.run_dir), "--allow-legacy"])
         text = Path(json.loads(out)["report"]).read_text(encoding="utf-8")
         self.assertIn("结论已更新", text)
         self.assertNotIn("不生成委外发料明细（P1）", text)
@@ -104,9 +106,29 @@ class TestReport(unittest.TestCase):
     def test_report_without_conclusions_still_works(self):
         st = RunState(self.run_dir, "R2", "无结论功能")
         st.mark_case("C01", "core", "通过")
-        rc, out = _call(["report", "--run-dir", str(self.run_dir)])
+        rc, out = _call(["report", "--run-dir", str(self.run_dir), "--allow-legacy"])
         self.assertEqual(rc, 0)
         self.assertTrue(Path(json.loads(out)["report"]).exists())
+
+    def test_report_gate_requires_allow_legacy(self):
+        st = RunState(self.run_dir, "R3", "历史功能")
+        st.mark_case("C01", "core", "通过")
+        rc, out = _call(["report", "--run-dir", str(self.run_dir)])
+        self.assertEqual(rc, 1)
+        self.assertIn("allow-legacy", json.loads(out)["next_hint"])
+
+    def test_report_merges_coverage_only_exec_case(self):
+        RP.init_run_package(self.run_dir, "覆盖回流", mode="standard", requirements=["R-01"])
+        RunState.load_or_create(self.run_dir, "R4", "覆盖回流").save()
+        RP.upsert_case(self.run_dir, {
+            "id": "C01", "priority": "P1", "requirement_refs": ["R-01"],
+            "oracle_mode": "api", "status": "通过", "evidence_ids": [],
+        }, force=True)
+        rc, out = _call(["report", "--run-dir", str(self.run_dir)])
+        self.assertEqual(rc, 0)
+        text = Path(json.loads(out)["report"]).read_text(encoding="utf-8")
+        self.assertIn("C01", text)
+        self.assertIn("通过 1", text)
 
 
 class TestErrors(unittest.TestCase):
@@ -357,12 +379,42 @@ class TestRunPackageCommands(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertFalse(json.loads(out)["structure_ok"])
 
-    def test_init_refuses_overwrite(self):
+    def test_init_is_idempotent_without_force(self):
         args = ["init", "--run-dir", str(self.run_dir), "--feature", "示例功能"]
         self.assertEqual(_call(args)[0], 0)
         rc, out = _call(args)
-        self.assertEqual(rc, 1)
-        self.assertIn("已存在", json.loads(out)["error"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out)["status"], "initialized")
+
+    def test_init_with_runner_and_cases_sidecar(self):
+        cases_file = self.run_dir.parent / "cases.json"
+        cases_file.write_text(json.dumps([{
+            "id": "C01", "priority": "P0", "requirement_refs": ["R-01"],
+            "test_point": "新增成功", "oracle_mode": "ui",
+        }], ensure_ascii=False), encoding="utf-8")
+        rc, out = _call([
+            "init", "--run-dir", str(self.run_dir), "--feature", "示例功能",
+            "--mode", "standard", "--with-runner", "--from-cases", str(cases_file),
+        ])
+        self.assertEqual(rc, 0, out)
+        payload = json.loads(out)
+        self.assertEqual(payload["cases"], 1)
+        self.assertTrue((self.run_dir / "run_all.py").exists())
+        runner = (self.run_dir / "run_all.py").read_text(encoding="utf-8")
+        self.assertIn('"feature": "示例功能"', runner)
+        coverage = json.loads((self.run_dir / "coverage.json").read_text(encoding="utf-8"))
+        self.assertEqual(coverage["cases"][0]["id"], "C01")
+        contract = json.loads((self.run_dir / "contract.json").read_text(encoding="utf-8"))
+        self.assertEqual(contract["requirements"][0]["case_ids"], ["C01"])
+
+    def test_vendored_entrypoint_can_create_runner(self):
+        entry = ROOT / "web-blackbox-testing/scripts/qa_case.py"
+        proc = subprocess.run([
+            sys.executable, str(entry), "init", "--run-dir", str(self.run_dir),
+            "--feature", "vendored path", "--with-runner",
+        ], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertTrue((self.run_dir / "run_all.py").exists())
 
 
 class TestParserWiring(unittest.TestCase):

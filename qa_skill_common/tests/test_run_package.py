@@ -30,10 +30,14 @@ class InitAndEvidenceTest(unittest.TestCase):
         self.assertTrue((self.run_dir / "run_state.json").exists())
         self.assertTrue((self.run_dir / "data_ledger.json").exists())
 
-    def test_init_refuses_existing_without_force(self):
-        RP.init_run_package(self.run_dir, "示例功能")
-        with self.assertRaises(FileExistsError):
-            RP.init_run_package(self.run_dir, "示例功能")
+    def test_init_is_idempotent_and_adds_requirements(self):
+        RP.init_run_package(self.run_dir, "示例功能", requirements=["R-01"])
+        before = (self.run_dir / "coverage.json").read_text(encoding="utf-8")
+        RP.init_run_package(self.run_dir, "示例功能", requirements=["R-02"])
+        after = (self.run_dir / "coverage.json").read_text(encoding="utf-8")
+        self.assertEqual(before, after)
+        contract = json.loads((self.run_dir / "contract.json").read_text(encoding="utf-8"))
+        self.assertEqual([x["id"] for x in contract["requirements"]], ["R-01", "R-02"])
 
     def test_add_evidence_hashes_and_deduplicates(self):
         RP.init_run_package(self.run_dir, "示例功能")
@@ -44,6 +48,23 @@ class InitAndEvidenceTest(unittest.TestCase):
         self.assertEqual(first["id"], second["id"])
         self.assertEqual(first["path"], "evidence/shot.png")
         self.assertEqual(len(first["sha256"]), 64)
+
+    def test_upsert_case_updates_status_and_contract_mapping(self):
+        RP.init_run_package(self.run_dir, "示例功能", requirements=["R-01"])
+        first = RP.upsert_case(self.run_dir, {
+            "id": "TC-01", "priority": "p1", "requirement_ref": "R-01",
+            "status": "未执行",
+        })
+        second = RP.upsert_case(self.run_dir, {
+            "id": "TC-01", "priority": "P1", "requirement_ref": "R-01",
+            "status": "通过", "oracle_mode": "api",
+        }, force=True)
+        self.assertEqual(first["id"], "TC-01")
+        self.assertEqual(second["status"], "通过")
+        coverage = json.loads((self.run_dir / "coverage.json").read_text(encoding="utf-8"))
+        self.assertEqual(coverage["cases"][0]["oracle_mode"], "api")
+        contract = json.loads((self.run_dir / "contract.json").read_text(encoding="utf-8"))
+        self.assertEqual(contract["requirements"][0]["case_ids"], ["TC-01"])
 
     def test_append_decision_is_persisted(self):
         RP.init_run_package(self.run_dir, "示例功能")

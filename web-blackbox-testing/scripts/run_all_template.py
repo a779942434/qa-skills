@@ -309,6 +309,22 @@ def main():
             selected_phase=args.phase,
         )
 
+        # 运行器写 run_state；标准报告同时消费 coverage，因此这里做一次显式回写。
+        try:
+            for cid, rec in (state.cases or {}).items():
+                run_package.upsert_case(package_dir, {
+                    "id": cid,
+                    "priority": rec.get("priority") or "P2",
+                    "requirement_refs": rec.get("requirement_refs") or [],
+                    "invariant_ids": rec.get("invariant_ids") or [],
+                    "oracle_mode": rec.get("oracle_mode") or "ui",
+                    "status": rec.get("status") or "未执行",
+                    "note": rec.get("note") or "",
+                    "evidence_ids": rec.get("evidence_refs") or [],
+                }, force=True)
+        except Exception as exc:
+            print(f"[run_all] coverage 回写警告：{type(exc).__name__}: {exc}")
+
         errs = error_report(watchers)
         if errs:
             state.meta["page_errors"] = errs[:20]

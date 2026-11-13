@@ -125,23 +125,61 @@ def _api_step(page, watcher, step):
             "status": hits[-1].get("status")}
 
 
-def _run_step(page, watcher, step, i, out_dir, label, feature):
+def _scope_selector(scope):
+    """把简写 scope 转成 Playwright CSS；dialog 默认取最后一个可见弹窗。"""
+    value = str(scope or "body").strip()
+    if value in ("dialog", "弹窗", "弹窗内"):
+        return ".el-dialog:visible"
+    return value or "body"
+
+
+def _root_for_scope(page, scope):
+    """返回 scope 对应的根 Locator；body 直接返回 page（支持 get_by_text）。"""
+    selector = _scope_selector(scope)
+    if selector == "body":
+        return page
+    loc = page.locator(selector)
+    return loc.last if loc.count() else loc
+
+
+def _visible_text_locator(page, text, scope="body"):
+    """在指定 scope 内找第一个可见的精确文本元素。"""
+    root = _root_for_scope(page, scope)
+    loc = root.get_by_text(str(text), exact=True)
+    for idx in range(min(loc.count(), 20)):
+        item = loc.nth(idx)
+        try:
+            if item.is_visible():
+                return item
+        except Exception:
+            continue
+    raise AssertionError("未找到可见文本: {}".format(text))
+
+
+def _run_step(page, watcher, step, i, out_dir, label, feature, state=None):
     """执行单步，返回 (ok, detail, evidence_path)。"""
     from . import bbt_helpers as H
     from .bbt_osd_common import goto as _goto
 
+    state = state if state is not None else {}
     act = (step.get("action") or "").strip()
     if not act:
         raise ValueError("第 {} 步缺少 action".format(i))
-    scope = step.get("scope") or "body"
+    scope = step.get("scope") or state.get("scope") or "body"
 
     if act == "goto":
         _goto(page, step["url"])
         return True, {"url": page.url}, ""
     if act == "click":
-        r = H.click_visible_text(page, step["text"], timeout=int((step.get("timeout_ms") or DEFAULT_ACTION_MS)))
-        ok = bool(r.get("clicked")) if isinstance(r, dict) else bool(r)
-        return ok, {"text": step["text"], "via": (r or {}).get("via") if isinstance(r, dict) else ""}, ""
+        timeout = int(step.get("timeout_ms") or DEFAULT_ACTION_MS)
+        if _scope_selector(scope) == "body":
+            r = H.click_visible_text(page, step["text"], timeout=timeout)
+            ok = bool(r.get("clicked")) if isinstance(r, dict) else bool(r)
+            via = (r or {}).get("via") if isinstance(r, dict) else ""
+        else:
+            _visible_text_locator(page, step["text"], scope).click(timeout=timeout)
+            ok, via = True, "scope"
+        return ok, {"text": step["text"], "via": via}, ""
     if act == "fill":
         item = H.form_item(page, step["label"], scope=scope)
         item.locator("input, textarea").first.fill(str(step.get("value", "")))
@@ -154,6 +192,95 @@ def _run_step(page, watcher, step, i, out_dir, label, feature):
     if act == "press":
         page.keyboard.press(step.get("key", "Enter"))
         return True, {"key": step.get("key", "Enter")}, ""
+    if act == "hover":
+        timeout = int(step.get("timeout_ms") or DEFAULT_ACTION_MS)
+        if step.get("selector"):
+            page.locator(step["selector"]).first.hover(timeout=timeout)
+            detail = {"selector": step["selector"]}
+        else:
+            _visible_text_locator(page, step.get("text") or "", scope).hover(timeout=timeout)
+            detail = {"text": step.get("text") or ""}
+        return True, detail, ""
+    if act == "dialog":
+        title = step.get("title") or step.get("text")
+        dialog = H.dialog_by_title(page, title=title, timeout=float(step.get("timeout") or 3))
+        if dialog is None:
+            raise AssertionError("未出现可见弹窗: {}".format(title or "任意"))
+        if title:
+            selector = '.el-dialog:visible:has(.el-dialog__title:text-is({}))'.format(
+                json.dumps(str(title), ensure_ascii=False))
+        else:
+            selector = ".el-dialog:visible"
+        state["scope"] = selector
+        return True, {"title": title or "", "scope": selector}, ""
+    if act == "body":
+        state["scope"] = "body"
+        return True, {"scope": "body"}, ""
+    if act == "upload":
+        raw = step.get("file") or step.get("path")
+        if not raw:
+            raise ValueError("upload 缺少 file/path")
+        path = Path(str(raw)).expanduser()
+        candidates = [path] if path.is_absolute() else [
+            Path.cwd() / path, out_dir.parent / path,
+        ]
+        source = next((p for p in candidates if p.exists()), None)
+        if source is None:
+            raise FileNotFoundError("upload 文件不存在: {}".format(raw))
+        input_selector = step.get("selector") or step.get("input_selector")
+        if input_selector:
+            inputs = page.locator(input_selector)
+        else:
+            inputs = page.locator("input[type=file]")
+        if inputs.count():
+            inputs.last.set_input_files(str(source))
+            via = input_selector or "input[type=file]"
+        else:
+            timeout = int(step.get("timeout_ms") or DEFAULT_ACTION_MS)
+            with page.expect_file_chooser(timeout=timeout) as chooser_info:
+                H.click_visible_text(page, step.get("text") or "上传", timeout=timeout)
+            chooser_info.value.set_files(str(source))
+            via = "file_chooser"
+        return True, {"file": str(source), "via": via}, ""
+    if act == "row_select":
+        row_text = step.get("text") or step.get("row_text") or step.get("cell_text")
+        if not row_text:
+            raise ValueError("row_select 缺少 text/row_text")
+        row_selector = step.get("row_selector") or ".el-table__row"
+        row = page.locator(row_selector).filter(has_text=str(row_text)).first
+        if not row.count():
+            raise AssertionError("未找到表格行: {}".format(row_text))
+        checkbox = row.locator("input[type=checkbox]").first
+        if not checkbox.count():
+            checkbox = row.locator(".el-checkbox").first
+        if checkbox.count():
+            checkbox.click(force=True)
+            via = "checkbox"
+        else:
+            row.click()
+            via = "row"
+        return True, {"text": str(row_text), "via": via}, ""
+    if act == "expect_download":
+        timeout = int(step.get("timeout_ms") or DEFAULT_ACTION_MS)
+        with page.expect_download(timeout=timeout) as download_info:
+            if step.get("selector"):
+                page.locator(step["selector"]).first.click()
+            else:
+                _visible_text_locator(page, step.get("text") or "", scope).click()
+        download = download_info.value
+        name = step.get("name") or download.suggested_filename or "download"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        target = Path(out_dir) / O.safe_name(name)
+        download.save_as(str(target))
+        return True, {"path": str(target), "suggested_filename": name}, str(target)
+    if act == "wait_toast":
+        text = step.get("text") or step.get("keyword") or ""
+        if not text:
+            raise ValueError("wait_toast 缺少 text/keyword")
+        ok = H.wait_toast(page, text, timeout=float(step.get("timeout") or 10))
+        if not ok:
+            raise TimeoutError("未出现提示: {}".format(text))
+        return True, {"text": text}, ""
     if act == "sleep":
         ms = int(step.get("ms") or 300)
         if ms > 800:
@@ -164,13 +291,28 @@ def _run_step(page, watcher, step, i, out_dir, label, feature):
         return True, _api_step(page, watcher, step), ""
     if act == "assert_visible":
         to = float(step.get("timeout") or DEFAULT_NAV_MS / 1000)
-        ok = H.wait_visible(page, "text={}".format(step["text"]), timeout=to)
+        if _scope_selector(scope) == "body":
+            ok = H.wait_visible(page, "text={}".format(step["text"]), timeout=to)
+        else:
+            try:
+                _visible_text_locator(page, step["text"], scope).wait_for(state="visible", timeout=to * 1000)
+                ok = True
+            except Exception:
+                ok = False
         return bool(ok), {"text": step["text"]}, ""
     if act == "assert_text":
         to = float(step.get("timeout") or 3)
-        hit = H.wait_text(page, step["text"], timeout=to)
-        if not hit:
-            raise AssertionError("未出现文本: {}".format(step["text"]))
+        if _scope_selector(scope) == "body":
+            hit = H.wait_text(page, step["text"], timeout=to)
+            if not hit:
+                raise AssertionError("未出现文本: {}".format(step["text"]))
+        else:
+            loc = _root_for_scope(page, scope)
+            try:
+                loc.get_by_text(str(step["text"]), exact=False).first.wait_for(
+                    state="visible", timeout=to * 1000)
+            except Exception as exc:
+                raise AssertionError("未出现文本: {}".format(step["text"])) from exc
         return True, {"text": step["text"]}, ""
     if act == "assert_value":
         item = H.form_item(page, step["label"], scope=scope)
@@ -183,7 +325,7 @@ def _run_step(page, watcher, step, i, out_dir, label, feature):
     if act == "read":
         sel = step.get("selector") or ".el-table__row"
         mx = int(step.get("max") or 20)
-        loc = page.locator(sel)
+        loc = _root_for_scope(page, scope).locator(sel)
         vals = []
         for j in range(min(loc.count(), mx)):
             try:
@@ -203,10 +345,35 @@ def _run_step(page, watcher, step, i, out_dir, label, feature):
 
 # ---------------------------------------------------------------- 子命令
 
+def _load_cases_json(path_value: str | None) -> list[dict]:
+    """读取生成技能的结构化用例 sidecar；接受 list 或 {"cases": [...]}。"""
+    if not path_value:
+        return []
+    path = Path(path_value).expanduser()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError("cases 文件不是合法 JSON: {}".format(exc)) from exc
+    if isinstance(data, dict):
+        data = data.get("cases") or data.get("test_cases") or []
+    if not isinstance(data, list):
+        raise ValueError("cases 文件应为数组，或含 cases/test_cases 数组")
+    return [run_package.normalize_case_record(item) for item in data if isinstance(item, dict)]
+
+
 def cmd_init(args):
     """初始化标准运行包；不联网，不覆盖已有文件（除非 --force）。"""
     run_dir = Path(args.run_dir).expanduser()
     base_url = args.base_url or os.environ.get("MES_URL", "")
+    try:
+        cases = _load_cases_json(args.from_cases)
+    except ValueError as exc:
+        return _err(str(exc), next_hint="修正 cases JSON 后重试", code=2)
+    requirements = list(args.requirement or [])
+    for case in cases:
+        for ref in case.get("requirement_refs") or []:
+            if ref not in requirements:
+                requirements.append(ref)
     environment = run_package.environment_snapshot(
         base_url,
         tenant_alias=args.tenant or "",
@@ -219,18 +386,61 @@ def cmd_init(args):
     try:
         paths = run_package.init_run_package(
             run_dir, args.feature, mode=args.mode,
-            requirements=args.requirement or [], force=args.force,
+            requirements=requirements, force=args.force,
             run_id=args.run_id or "", environment=environment,
         )
+        for case in cases:
+            run_package.upsert_case(run_dir, case, force=args.force)
+        case_refs = {ref for case in cases for ref in (case.get("requirement_refs") or [])}
+        if case_refs:
+            contract_path = run_dir / "contract.json"
+            contract_data = json.loads(contract_path.read_text(encoding="utf-8"))
+            for req in contract_data.get("requirements") or []:
+                if str(req.get("id") or "") in case_refs:
+                    req["status"] = "defined"
+            contract_path.write_text(json.dumps(contract_data, ensure_ascii=False, indent=2),
+                                     encoding="utf-8")
         state = RunState.load_or_create(run_dir, run_id=args.run_id or "", feature=args.feature)
         state.save()
-    except FileExistsError as exc:
-        return _err(str(exc), next_hint="确认要覆盖时加 --force", code=1)
+    except Exception as exc:
+        return _err("初始化失败: {}".format(exc),
+                    next_hint="检查 --run-dir/--from-cases；需要重置包时加 --force", code=1)
+
+    runner_path = ""
+    if args.with_runner:
+        template = None
+        for base in Path(__file__).resolve().parents:
+            candidate = base / "web-blackbox-testing/scripts/run_all_template.py"
+            if candidate.exists():
+                template = candidate
+                break
+        template = template or (Path(__file__).resolve().parents[1] /
+                                "web-blackbox-testing/scripts/run_all_template.py")
+        if not template.exists():
+            return _err("找不到 runner 模板: {}".format(template), code=1)
+        target = run_dir / "run_all.py"
+        if args.force or not target.exists():
+            text = template.read_text(encoding="utf-8")
+            text = text.replace('"feature": "待填功能名"',
+                                '"feature": {}'.format(json.dumps(args.feature, ensure_ascii=False)))
+            text = text.replace('"run_id": os.environ.get("RUN_ID", "")',
+                                '"run_id": {}'.format(json.dumps(args.run_id or "", ensure_ascii=False)))
+            text = text.replace('"base_url": os.environ.get("MES_URL", "")',
+                                '"base_url": {}'.format(json.dumps(base_url, ensure_ascii=False)))
+            text = text.replace('"requirement_refs": [],',
+                                '"requirement_refs": {},'.format(json.dumps(requirements, ensure_ascii=False)), 1)
+            target.write_text(text, encoding="utf-8")
+        runner_path = str(target)
+    for sub in ("cases", "evidence", "test-reports"):
+        (run_dir / sub).mkdir(parents=True, exist_ok=True)
     payload = {
         "status": "initialized",
         "run_dir": str(run_dir),
         "mode": args.mode,
-        "requirements": list(args.requirement or []),
+        "requirements": requirements,
+        "cases": len(cases),
+        "case_file": str(Path(args.from_cases).expanduser()) if args.from_cases else "",
+        "runner": runner_path,
         "files": paths,
     }
     return _finish(payload, kind="init", run_dir=run_dir, label="init", code=0)
@@ -355,8 +565,26 @@ def cmd_exec(args):
 
     url = args.url or spec.get("url") or ""
     feature = args.feature or spec.get("feature") or ""
-    label = args.label or spec.get("label") or "exec"
+    case_id = args.case_id or args.label or spec.get("case_id") or spec.get("id") or "exec"
+    label = case_id
+    priority = str(args.priority or spec.get("priority") or "P2").upper()
+    oracle_mode = str(args.oracle_mode or spec.get("oracle_mode") or "ui").lower()
+    requirements = list(args.requirement or [])
+    for key in ("requirement_refs", "requirements", "requirement"):
+        values = spec.get(key) or []
+        if isinstance(values, str):
+            values = [values]
+        for ref in values:
+            ref = str(ref or "").strip()
+            if ref and ref not in requirements:
+                requirements.append(ref)
     run_dir = Path(args.run_dir).expanduser() if args.run_dir else Path.cwd()
+    try:
+        run_package.init_run_package(
+            run_dir, feature or "ad-hoc", mode="quick", requirements=requirements,
+        )
+    except Exception as exc:
+        return _err("运行包初始化失败: {}".format(exc), code=1)
     out_dir = run_dir / "evidence"
     case_out = run_dir / "cases"
     case_out.mkdir(parents=True, exist_ok=True)
@@ -368,6 +596,7 @@ def cmd_exec(args):
     status = "pass"
     next_hint = ""
     net_error = ""
+    executor_state = {}
 
     steps_note = ""
     with sync_playwright() as pw:
@@ -394,7 +623,8 @@ def cmd_exec(args):
             for i, step in enumerate(steps):
                 t0 = time.time()
                 try:
-                    ok, detail, ev = _run_step(page, watcher, step, i, out_dir, label, feature)
+                    ok, detail, ev = _run_step(page, watcher, step, i, out_dir, label, feature,
+                                               state=executor_state)
                 except Exception as exc:
                     err = "{}: {}".format(type(exc).__name__, exc)[:300]
                     ms = int((time.time() - t0) * 1000)
@@ -430,9 +660,11 @@ def cmd_exec(args):
             except Exception:
                 pass
 
+    evidence_ids = []
     for evidence_path in evidence:
         try:
-            run_package.add_evidence(run_dir, evidence_path, case_id=label, source="ui")
+            ev = run_package.add_evidence(run_dir, evidence_path, case_id=case_id, source="ui")
+            evidence_ids.append(ev["id"])
         except Exception:
             pass
     elapsed = int((time.time() - started) * 1000)
@@ -443,6 +675,7 @@ def cmd_exec(args):
         signals["_net_error"] = net_error
     full_payload = {
         "label": label,
+        "case_id": case_id,
         "status": status,
         "ms": elapsed,
         "signals": signals,
@@ -464,6 +697,19 @@ def cmd_exec(args):
     stdout_payload["steps"] = stdout_steps
     if detail_path_str:
         stdout_payload["detail_path"] = detail_path_str
+    try:
+        run_package.upsert_case(run_dir, {
+            "id": case_id,
+            "priority": priority,
+            "requirement_refs": requirements,
+            "oracle_mode": oracle_mode,
+            "status": "通过" if status == "pass" else "失败",
+            "evidence_ids": evidence_ids,
+            "note": next_hint or ("" if status == "pass" else "exec 执行失败"),
+        }, force=True)
+    except Exception as exc:
+        stdout_payload["coverage_error"] = "{}: {}".format(type(exc).__name__, exc)[:300]
+        next_hint = next_hint or "coverage 写回失败，检查 run-dir 下的 coverage.json"
     # G2：全量现场已写 detail_path，stdout 截断时复用它，不再另落 <label>.exec.json
     return _finish(stdout_payload, kind="exec", run_dir=run_dir, label=label,
                    code=0 if status == "pass" else 1, full_path_hint=detail_path_str)
@@ -647,15 +893,45 @@ def cmd_report(args):
     from .report_gen import gen_report
 
     run_dir = Path(args.run_dir).expanduser()
+    pkg = run_package.load_package(run_dir)
+    if pkg["legacy"] and not args.allow_legacy:
+        return _err(
+            "运行目录不是标准运行包（缺少 manifest/contract/coverage/evidence/defects）",
+            next_hint="先运行 qa_case init；历史目录确认只读兼容后加 --allow-legacy",
+            code=1,
+        )
     state = RunState.load_or_create(run_dir, run_id=args.run_id or "")
     conclusions = _load_conclusions(run_dir)
-    cases = state.results_for_report()
+    cov = coverage_mod.audit_coverage(pkg["contract"], pkg["coverage"], state, strict=False)
+    state_cases = state.results_for_report()
+    by_id = {str(c.get("id") or ""): c for c in state_cases}
+    # exec 只写 coverage，不一定经过 RunState；报告必须把这类用例也合并进来。
+    for cid, rec in (cov.get("cases") or {}).items():
+        if cid in by_id:
+            continue
+        status = str(rec.get("status") or "未执行")
+        state_cases.append({
+            "id": cid,
+            "模块": rec.get("module") or rec.get("test_point") or "",
+            "结果": status,
+            "阻塞类型": rec.get("blocker_type", ""),
+            "证据": "",
+            "备注": rec.get("note", ""),
+            "优先级": rec.get("priority", ""),
+            "需求点": rec.get("requirement_refs", []),
+            "不变量": rec.get("invariant_ids", []),
+            "oracle_mode": rec.get("oracle_mode", ""),
+            "分类": rec.get("classification", ""),
+            "置信度": rec.get("confidence", ""),
+            "复现": rec.get("reproducibility", {}),
+            "证据ID": rec.get("evidence_ids", []),
+            "耗时ms": rec.get("duration_ms", 0),
+        })
+    cases = state_cases
     if args.case:
         cases = [c for c in cases if c.get("id") == args.case]
     meta = dict(conclusions.get("meta") or {})
     meta.setdefault("功能", state.feature or "")
-    pkg = run_package.load_package(run_dir)
-    cov = coverage_mod.audit_coverage(pkg["contract"], pkg["coverage"], state, strict=False)
     evidence_items = (pkg.get("evidence") or {}).get("items") or []
     for case in cases:
         if not case.get("证据"):
@@ -688,6 +964,7 @@ def cmd_report(args):
     out.write_text(text, encoding="utf-8")
     jg = meta.get("判定动作") or {}
     payload = {"report": str(out), "cases": len(cases),
+               "legacy": bool(pkg.get("legacy")),
                "conclusions": len(conclusions.get("结论") or []),
                "judgements": {"total": jg.get("total", 0), "verdict": jg.get("verdict", 0),
                               "control": jg.get("control", 0)},
@@ -719,6 +996,13 @@ def build_parser():
     p.add_argument("--steps", required=True, help="steps JSON 路径")
     p.add_argument("--run-dir", default=None, help="产物目录（默认 cwd）")
     p.add_argument("--label", default=None, help="用例/批次标识")
+    p.add_argument("--case-id", default=None, help="覆盖用例 ID；默认取 label")
+    p.add_argument("--priority", default="P2", choices=("P0", "P1", "P2", "P3"),
+                   help="用例优先级")
+    p.add_argument("--requirement", action="append", default=[],
+                   help="需求编号/URL，可重复")
+    p.add_argument("--oracle-mode", default="ui", choices=("ui", "api", "db", "mixed"),
+                   help="判定证据通道")
     p.add_argument("--url", default=None, help="入口 URL（也可写在 steps.json 的 url 字段）")
     p.add_argument("--feature", default=None, help="功能名（用于注册表回写）")
     p.add_argument("--visible", action="store_true", help="可见窗口（默认无头）")
@@ -753,6 +1037,10 @@ def build_parser():
     p.add_argument("--config-fingerprint", default=None)
     p.add_argument("--browser-profile", default=None)
     p.add_argument("--app-version", default=None)
+    p.add_argument("--with-runner", action="store_true",
+                   help="复制可执行的 run_all.py 模板并预填 CONFIG")
+    p.add_argument("--from-cases", default=None,
+                   help="从生成技能产出的 cases.json 导入 coverage/contract")
     p.add_argument("--force", action="store_true")
     p.set_defaults(func=cmd_init)
 
@@ -784,6 +1072,8 @@ def build_parser():
     p.add_argument("--run-id", default=None)
     p.add_argument("--case", default=None)
     p.add_argument("--out", default=None)
+    p.add_argument("--allow-legacy", action="store_true",
+                   help="允许对缺少标准包文件的历史目录按旧逻辑渲染")
     p.set_defaults(func=cmd_report)
     return ap
 
