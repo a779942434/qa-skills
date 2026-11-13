@@ -13,3 +13,8 @@ node_modules/
 /.playwright-mcp/
 /sites/
 /bug-reports
+/tmp
+ones-submission-ledger.json
+**/ones-submission-ledger.json
+**/scripts/tmp/
+generate-arun-api-scripts/config/settings.local.yaml
