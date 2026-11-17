@@ -28,6 +28,10 @@ DATA_LEDGER = "data_ledger.json"
 JUDGEMENTS = "judgements.jsonl"
 CONCLUSIONS = "conclusions.json"
 
+TERMINAL_DECISION_STATUSES = frozenset({"resolved", "approved", "confirmed", "waived", "rejected"})
+WAIVED_DECISION_STATUSES = frozenset({"waived"})
+VALID_ORACLE_MODES = frozenset({"ui", "api", "db", "mixed", "downstream"})
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
@@ -62,6 +66,60 @@ def _write_json(path: Path, payload: Any) -> None:
 def _slug(text: str) -> str:
     clean = re.sub(r"[^A-Za-z0-9\u4e00-\u9fff]+", "-", str(text or "run")).strip("-")
     return clean or "run"
+
+
+def _fingerprint(payload: Any) -> str:
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _empty_oracle() -> dict[str, Any]:
+    return {"mode": "", "expected": "", "precision": "", "evidence": []}
+
+
+def _empty_requirement(ref: str) -> dict[str, Any]:
+    return {
+        "id": ref,
+        "source": ref,
+        "quote": "",
+        "status": "undefined",
+        "case_ids": [],
+        "decision_ids": [],
+        "oracle": _empty_oracle(),
+        "data_dependencies": [],
+        "updated_at": "",
+    }
+
+
+def normalize_requirement_record(record: dict[str, Any]) -> dict[str, Any]:
+    """统一需求合同字段；兼容旧版只有 id/source/quote/status/case_ids 的合同。"""
+    item = dict(record or {})
+    rid = str(item.get("id") or item.get("requirement_ref") or "").strip()
+    if not rid:
+        raise ValueError("需求条款缺少 id")
+    item["id"] = rid
+    item["source"] = str(item.get("source") or rid)
+    item["quote"] = str(item.get("quote") or "")
+    item["status"] = str(item.get("status") or "undefined").lower()
+    item["case_ids"] = _refs(item.get("case_ids"))
+    item["decision_ids"] = _refs(item.get("decision_ids"))
+    oracle = item.get("oracle")
+    if isinstance(oracle, dict):
+        merged = _empty_oracle()
+        merged.update(oracle)
+        merged["mode"] = str(merged.get("mode") or "").lower()
+        merged["evidence"] = _refs(merged.get("evidence"))
+        item["oracle"] = merged
+    else:
+        item["oracle"] = _empty_oracle()
+        if item.get("oracle_mode"):
+            item["oracle"]["mode"] = str(item.get("oracle_mode")).lower()
+        if item.get("expected"):
+            item["oracle"]["expected"] = str(item.get("expected"))
+    deps = item.get("data_dependencies")
+    item["data_dependencies"] = list(deps) if isinstance(deps, list) else _refs(deps)
+    item["updated_at"] = str(item.get("updated_at") or "")
+    return item
 
 
 def package_paths(run_dir: str | Path) -> dict[str, Path]:
@@ -99,7 +157,7 @@ def environment_snapshot(
         except Exception:
             host = ""
     profile_hash = hashlib.sha256(str(browser_profile).encode("utf-8")).hexdigest()[:16] if browser_profile else ""
-    return {
+    snapshot = {
         "base_url": base_url,
         "host": host,
         "tenant_alias": tenant_alias,
@@ -110,6 +168,17 @@ def environment_snapshot(
         "app_version": app_version,
         "captured_at": _now(),
     }
+    snapshot["snapshot_id"] = _environment_id(snapshot)
+    return snapshot
+
+
+def _environment_id(environment: dict | None) -> str:
+    env = environment or {}
+    stable = {key: env.get(key, "") for key in (
+        "base_url", "host", "tenant_alias", "role", "location_org",
+        "config_fingerprint", "browser_profile_hash", "app_version",
+    )}
+    return _fingerprint(stable)
 
 
 def init_run_package(
@@ -121,6 +190,7 @@ def init_run_package(
     force: bool = False,
     run_id: str = "",
     environment: dict | None = None,
+    data_batch_id: str = "",
 ) -> dict[str, Any]:
     """初始化运行包；默认只补缺失文件，不覆盖已有状态。
 
@@ -131,17 +201,21 @@ def init_run_package(
     existing = [key for key in ("manifest", "contract", "coverage", "evidence", "defects")
                 if paths[key].exists()]
     req_refs = [str(x).strip() for x in (requirements or []) if str(x).strip()]
+    effective_run_id = run_id or f"{_slug(feature)}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    env = dict(environment or environment_snapshot(""))
+    env.setdefault("snapshot_id", _environment_id(env))
     manifest = {
         "schema_version": SCHEMA_VERSION,
-        "run_id": run_id or f"{_slug(feature)}-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
+        "run_id": effective_run_id,
         "feature": feature,
         "mode": mode,
         "requirement_refs": req_refs,
+        "data_batch_id": str(data_batch_id or effective_run_id),
         "created_at": _now(),
         "started_at": "",
         "completed_at": "",
         "status": "initialized",
-        "environment": environment or environment_snapshot(""),
+        "environment": env,
         "tooling": {
             "qa_case": True,
             "qa_action": False,
@@ -151,17 +225,9 @@ def init_run_package(
     }
     contract = {
         "schema_version": SCHEMA_VERSION,
-        "requirements": [
-            {
-                "id": ref,
-                "source": ref,
-                "quote": "",
-                "status": "undefined",
-                "case_ids": [],
-            }
-            for ref in req_refs
-        ],
+        "requirements": [_empty_requirement(ref) for ref in req_refs],
         "decisions": [],
+        "updated_at": _now(),
     }
     coverage = {
         "schema_version": SCHEMA_VERSION,
@@ -203,8 +269,7 @@ def init_run_package(
         known = {str(x.get("id") or "") for x in reqs}
         for ref in req_refs:
             if ref not in known:
-                reqs.append({"id": ref, "source": ref, "quote": "",
-                             "status": "undefined", "case_ids": []})
+                reqs.append(_empty_requirement(ref))
                 changed = True
         if changed:
             contract_now["requirements"] = reqs
@@ -309,21 +374,117 @@ def upsert_case(run_dir: str | Path, case: dict[str, Any], *, force: bool = Fals
     })
     requirements = list(contract.get("requirements") or [])
     by_id = {str(req.get("id") or ""): req for req in requirements}
+    changed = False
     for ref in merged.get("requirement_refs") or []:
         req = by_id.get(ref)
         if req is None:
-            req = {"id": ref, "source": ref, "quote": "", "status": "defined", "case_ids": []}
+            req = normalize_requirement_record(_empty_requirement(ref))
+            req["status"] = "defined"
             requirements.append(req)
             by_id[ref] = req
-        elif str(req.get("status") or "").lower() in ("", "undefined"):
-            req["status"] = "defined"
+            changed = True
+        else:
+            req = normalize_requirement_record(req)
+            by_id[ref] = req
+            if str(req.get("status") or "").lower() in ("", "undefined"):
+                req["status"] = "defined"
+                changed = True
         ids = list(req.get("case_ids") or [])
         if item["id"] not in ids:
             ids.append(item["id"])
+            changed = True
         req["case_ids"] = ids
-    contract["requirements"] = requirements
+        oracle = req.setdefault("oracle", _empty_oracle())
+        mode = str(item.get("oracle_mode") or "").lower()
+        if mode:
+            current = str(oracle.get("mode") or "").lower()
+            if not current:
+                oracle["mode"] = mode
+                changed = True
+            elif current != mode and current != "mixed" and mode != "mixed":
+                oracle["mode"] = "mixed"
+                changed = True
+        if changed:
+            req["updated_at"] = _now()
+    contract["requirements"] = list(by_id.values())
+    if changed:
+        contract["updated_at"] = _now()
     _write_json(paths["contract"], contract)
     return merged
+
+
+def upsert_requirement(run_dir: str | Path, requirement: dict[str, Any], *,
+                       force: bool = True) -> dict[str, Any]:
+    """新增/更新一条需求合同；case_ids 始终取并集，避免覆盖已有映射。"""
+    paths = package_paths(run_dir)
+    if not paths["contract"].exists():
+        init_run_package(run_dir, "ad-hoc", mode="quick")
+    item = normalize_requirement_record(requirement)
+    contract = _read_json(paths["contract"], {
+        "schema_version": SCHEMA_VERSION, "requirements": [], "decisions": [],
+    })
+    requirements = list(contract.get("requirements") or [])
+    old = next((x for x in requirements if str(x.get("id") or "") == item["id"]), None)
+    if old is None:
+        requirements.append(item)
+        merged = item
+    else:
+        merged = normalize_requirement_record(old)
+        for key, value in item.items():
+            if key == "case_ids":
+                merged[key] = _refs(list(merged.get(key) or []) + list(value or []))
+            elif key == "decision_ids":
+                merged[key] = _refs(list(merged.get(key) or []) + list(value or []))
+            elif force or key not in merged or merged.get(key) in (None, "", [], {}):
+                merged[key] = value
+        for idx, current in enumerate(requirements):
+            if str(current.get("id") or "") == item["id"]:
+                requirements[idx] = merged
+                break
+    merged["updated_at"] = _now()
+    contract["requirements"] = requirements
+    contract["updated_at"] = _now()
+    _write_json(paths["contract"], contract)
+    return merged
+
+
+def merge_coverage_metadata(run_dir: str | Path, *, invariants: Iterable[dict] | None = None,
+                            exclusions: Iterable[dict] | None = None) -> dict[str, Any]:
+    """把生成技能 sidecar 中的不变量/排除项并入 coverage；按 id/需求点去重。"""
+    paths = package_paths(run_dir)
+    if not paths["coverage"].exists():
+        init_run_package(run_dir, "ad-hoc", mode="quick")
+    coverage = _read_json(paths["coverage"], {
+        "schema_version": SCHEMA_VERSION, "cases": [], "invariants": [], "exclusions": [],
+    })
+    inv_by_id = {str(x.get("id") or ""): x for x in coverage.get("invariants") or []}
+    for inv in invariants or []:
+        if not isinstance(inv, dict):
+            continue
+        iid = str(inv.get("id") or "").strip()
+        if not iid:
+            continue
+        current = inv_by_id.get(iid) or {}
+        merged = dict(current)
+        merged.update(inv)
+        merged["case_ids"] = _refs(list(current.get("case_ids") or []) + list(inv.get("case_ids") or []))
+        inv_by_id[iid] = merged
+    ex_by_ref = {str(x.get("requirement_ref") or x.get("id") or ""): x
+                 for x in coverage.get("exclusions") or []}
+    for ex in exclusions or []:
+        if not isinstance(ex, dict):
+            continue
+        ref = str(ex.get("requirement_ref") or ex.get("id") or "").strip()
+        if not ref:
+            continue
+        current = ex_by_ref.get(ref) or {}
+        merged = dict(current)
+        merged.update(ex)
+        ex_by_ref[ref] = merged
+    coverage["invariants"] = list(inv_by_id.values())
+    coverage["exclusions"] = list(ex_by_ref.values())
+    _write_json(paths["coverage"], coverage)
+    return coverage
 
 
 def load_package(run_dir: str | Path) -> dict[str, Any]:
@@ -359,23 +520,246 @@ def update_manifest(run_dir: str | Path, **updates) -> dict:
         if key == "tooling" and isinstance(value, dict):
             manifest.setdefault("tooling", {}).update(value)
         elif key == "environment" and isinstance(value, dict):
-            manifest["environment"] = value
+            env = dict(value)
+            env.setdefault("snapshot_id", _environment_id(env))
+            manifest["environment"] = env
         else:
             manifest[key] = value
+    if manifest.get("environment") and not manifest["environment"].get("snapshot_id"):
+        manifest["environment"]["snapshot_id"] = _environment_id(manifest["environment"])
+    if not manifest.get("data_batch_id") and manifest.get("run_id"):
+        manifest["data_batch_id"] = manifest["run_id"]
     _write_json(paths["manifest"], manifest)
     return manifest
 
 
 def append_decision(run_dir: str | Path, record: dict[str, Any]) -> dict:
     paths = package_paths(run_dir)
+    if not paths["contract"].exists():
+        init_run_package(run_dir, "ad-hoc", mode="quick")
     contract = _read_json(paths["contract"], {"schema_version": SCHEMA_VERSION, "requirements": [], "decisions": []})
     item = dict(record or {})
-    item.setdefault("id", f"DEC-{len(contract.get('decisions') or []) + 1:03d}")
-    item.setdefault("status", "open")
+    refs = _refs(item.get("requirement_ids") or item.get("requirements") or
+                 item.get("requirement_refs") or item.get("requirement_id"))
+    if not refs:
+        raise ValueError("决策必须关联至少一个需求点")
+    status = str(item.get("status") or "open").lower()
+    if status in TERMINAL_DECISION_STATUSES and not str(item.get("resolution") or "").strip():
+        raise ValueError("已解决/已确认/已豁免/已驳回的决策必须填写 resolution")
+    existing_ids = {str(x.get("id") or "") for x in contract.get("decisions") or []}
+    seq = len(existing_ids) + 1
+    while f"DEC-{seq:03d}" in existing_ids:
+        seq += 1
+    item["id"] = str(item.get("id") or f"DEC-{seq:03d}")
+    item["requirement_ids"] = refs
+    item["status"] = status
+    item["resolution"] = str(item.get("resolution") or "")
+    item["owner"] = str(item.get("owner") or "")
+    item["source"] = str(item.get("source") or "")
+    item["applies_to"] = str(item.get("applies_to") or "")
+    item["valid_until"] = str(item.get("valid_until") or "")
     item.setdefault("created_at", _now())
+    item["updated_at"] = _now()
+    if status in TERMINAL_DECISION_STATUSES:
+        item.setdefault("decided_at", _now())
     contract.setdefault("decisions", []).append(item)
+    requirements = list(contract.get("requirements") or [])
+    by_id = {str(req.get("id") or ""): req for req in requirements}
+    for ref in refs:
+        req = by_id.get(ref)
+        if req is None:
+            continue
+        req = normalize_requirement_record(req)
+        req["decision_ids"] = _refs(list(req.get("decision_ids") or []) + [item["id"]])
+        if status in ("resolved", "approved", "confirmed"):
+            req["status"] = "defined"
+        elif status in WAIVED_DECISION_STATUSES:
+            req["status"] = "waived"
+        elif status == "rejected":
+            req["status"] = "rejected"
+        elif status in ("open", "pending"):
+            if str(req.get("status") or "") in ("", "undefined", "ambiguous", "pending"):
+                req["status"] = "pending"
+        req["updated_at"] = _now()
+        by_id[ref] = req
+    contract["requirements"] = list(by_id.values())
+    contract["updated_at"] = _now()
     _write_json(paths["contract"], contract)
     return item
+
+
+def set_requirement_oracle(
+    run_dir: str | Path,
+    requirement_id: str,
+    *,
+    mode: str,
+    expected: str,
+    precision: str = "",
+    evidence: Iterable[str] | None = None,
+    source: str = "",
+    quote: str = "",
+    data_dependencies: Iterable[str] | None = None,
+) -> dict:
+    """设置需求的判定依据（oracle）；这是自动判缺陷的前置条件。"""
+    rid = str(requirement_id or "").strip()
+    if not rid:
+        raise ValueError("requirement_id 不能为空")
+    oracle_payload = {
+        "mode": str(mode or "").lower(),
+        "expected": str(expected or ""),
+        "precision": str(precision or ""),
+        "evidence": _refs(evidence),
+    }
+    if not oracle_payload["expected"]:
+        raise ValueError("expected 不能为空")
+    paths = package_paths(run_dir)
+    if not paths["contract"].exists():
+        init_run_package(run_dir, "ad-hoc", mode="quick", requirements=[rid])
+    contract = _read_json(paths["contract"], {
+        "schema_version": SCHEMA_VERSION, "requirements": [], "decisions": [],
+    })
+    requirements = list(contract.get("requirements") or [])
+    target = next((x for x in requirements if str(x.get("id") or "") == rid), None)
+    if target is None:
+        target = normalize_requirement_record(_empty_requirement(rid))
+        requirements.append(target)
+    target = normalize_requirement_record(target)
+    target["oracle"] = oracle_payload
+    if source:
+        target["source"] = str(source)
+    if quote:
+        target["quote"] = str(quote)
+    if data_dependencies:
+        target["data_dependencies"] = _refs(list(target.get("data_dependencies") or []) +
+                                             list(data_dependencies))
+    if str(target.get("status") or "") in ("", "undefined", "ambiguous"):
+        target["status"] = "defined"
+    target["updated_at"] = _now()
+    for idx, current in enumerate(requirements):
+        if str(current.get("id") or "") == rid:
+            requirements[idx] = target
+            break
+    contract["requirements"] = requirements
+    contract["updated_at"] = _now()
+    _write_json(paths["contract"], contract)
+    return target
+
+
+def _decision_requirement_refs(decision: dict) -> list[str]:
+    return _refs(decision.get("requirement_ids") or decision.get("requirements") or
+                 decision.get("requirement_refs") or decision.get("requirement_id"))
+
+
+def requirement_versions(contract: dict, requirement_ids: Iterable[str] | None = None) -> dict[str, str]:
+    """计算需求条款 + 相关决策的稳定指纹，用于证据失效判断。"""
+    contract = contract or {}
+    include_all = requirement_ids is None
+    wanted = set(_refs(requirement_ids))
+    requirements = list(contract.get("requirements") or [])
+    decisions = list(contract.get("decisions") or [])
+    out: dict[str, str] = {}
+    for req in requirements:
+        rid = str(req.get("id") or "").strip()
+        if not rid or (not include_all and rid not in wanted):
+            continue
+        normalized = normalize_requirement_record(req)
+        relevant_decisions = [
+            {k: d.get(k) for k in ("id", "status", "resolution", "owner", "source",
+                                   "applies_to", "valid_until") if d.get(k) not in (None, "")}
+            for d in decisions if rid in _decision_requirement_refs(d)
+        ]
+        relevant_decisions.sort(key=lambda d: str(d.get("id") or ""))
+        out[rid] = _fingerprint({
+            "requirement": {
+                "id": rid,
+                "source": normalized.get("source", ""),
+                "quote": normalized.get("quote", ""),
+                "status": normalized.get("status", ""),
+                "oracle": normalized.get("oracle", {}),
+                "data_dependencies": normalized.get("data_dependencies", []),
+            },
+            "decisions": relevant_decisions,
+        })
+    return out
+
+
+def _case_requirement_refs(contract: dict, case_id: str) -> list[str]:
+    refs: list[str] = []
+    for req in (contract or {}).get("requirements") or []:
+        if case_id in _refs(req.get("case_ids")):
+            refs.append(str(req.get("id") or ""))
+    return [x for x in refs if x]
+
+
+def _parse_expiry(value: str) -> datetime | None:
+    text = str(value or "").strip().replace("Z", "+00:00")
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except Exception:
+        return None
+    if len(text) == 10:
+        parsed = parsed.replace(hour=23, minute=59, second=59)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    return parsed
+
+
+def evidence_validity(item: dict, contract: dict | None = None,
+                      manifest: dict | None = None) -> dict[str, Any]:
+    """判断一条证据是否仍绑定当前需求版本、环境快照和数据批次。"""
+    contract = contract or {}
+    manifest = manifest or {}
+    reasons: list[str] = []
+    if item.get("invalidated") or str(item.get("status") or "").lower() in ("stale", "invalid"):
+        reasons.append("证据已被显式标记失效")
+    expiry = _parse_expiry(item.get("valid_until") or "")
+    if expiry and datetime.now().astimezone() > expiry:
+        reasons.append("证据已超过有效期")
+    if reasons:
+        return {"status": "stale", "reasons": reasons}
+
+    binding = item.get("binding") or {}
+    if not isinstance(binding, dict) or not binding:
+        return {"status": "unbound", "reasons": ["证据没有版本/环境绑定"]}
+
+    case_id = str(item.get("case_id") or "")
+    bound_versions = binding.get("requirement_versions") or {}
+    current_versions = requirement_versions(contract, list(bound_versions) or _case_requirement_refs(contract, case_id))
+    if bound_versions or current_versions:
+        if not bound_versions:
+            return {"status": "unbound", "reasons": ["证据未绑定需求版本"]}
+        for rid, version in bound_versions.items():
+            current = current_versions.get(str(rid))
+            if not current:
+                reasons.append(f"需求条款已不存在: {rid}")
+            elif current != version:
+                reasons.append(f"需求版本已变化: {rid}")
+    if reasons:
+        return {"status": "stale", "reasons": reasons}
+
+    env = manifest.get("environment") or {}
+    current_env = env.get("snapshot_id") or _environment_id(env)
+    bound_env = str(binding.get("environment_snapshot_id") or "")
+    if not bound_env:
+        return {"status": "unbound", "reasons": ["证据未绑定环境快照"]}
+    if current_env and bound_env != current_env:
+        reasons.append("环境快照已变化")
+
+    current_batch = str(manifest.get("data_batch_id") or manifest.get("run_id") or "")
+    bound_batch = str(binding.get("data_batch_id") or "")
+    if bound_batch and current_batch and bound_batch != current_batch:
+        reasons.append("数据批次已变化")
+
+    current_page = str(manifest.get("page_fingerprint") or "")
+    bound_page = str(binding.get("page_fingerprint") or "")
+    if bound_page and current_page and bound_page != current_page:
+        reasons.append("页面指纹已变化")
+
+    if reasons:
+        return {"status": "stale", "reasons": reasons}
+    return {"status": "valid", "reasons": []}
 
 
 def add_evidence(
@@ -386,6 +770,8 @@ def add_evidence(
     defect_id: str = "",
     source: str = "ui",
     reproduction: dict | None = None,
+    binding: dict | None = None,
+    valid_until: str = "",
 ) -> dict:
     """把证据加入 index；路径优先保存为 run-dir 相对路径。"""
     run_dir = Path(run_dir).expanduser()
@@ -404,6 +790,22 @@ def add_evidence(
         rel = str(evidence_path.resolve())
     items_path = package_paths(run_dir)["evidence"]
     index = _read_json(items_path, {"schema_version": SCHEMA_VERSION, "items": []})
+    contract = _read_json(package_paths(run_dir)["contract"], {"requirements": [], "decisions": []})
+    manifest = _read_json(package_paths(run_dir)["manifest"], {})
+    refs = _case_requirement_refs(contract, case_id)
+    if not refs and defect_id:
+        try:
+            refs = _refs(find_defect(run_dir, defect_id).get("requirement_refs"))
+        except Exception:
+            refs = []
+    auto_binding = {
+        "requirement_versions": requirement_versions(contract, refs),
+        "environment_snapshot_id": (manifest.get("environment") or {}).get("snapshot_id") or
+                                   _environment_id(manifest.get("environment") or {}),
+        "data_batch_id": str(manifest.get("data_batch_id") or manifest.get("run_id") or ""),
+        "page_fingerprint": "",
+    }
+    auto_binding.update({k: v for k, v in (binding or {}).items() if v not in (None, "")})
     item = {
         "id": "EV-" + hashlib.sha256((rel + _now()).encode("utf-8")).hexdigest()[:12],
         "path": rel,
@@ -413,6 +815,8 @@ def add_evidence(
         "captured_at": _now(),
         "sha256": _sha256(evidence_path),
         "reproduction": reproduction or {},
+        "binding": auto_binding,
+        "valid_until": str(valid_until or ""),
     }
     items = index.setdefault("items", [])
     # 同一路径同一 case 的重复记录不重复追加
@@ -479,6 +883,8 @@ def audit_run_package(run_dir: str | Path, *, strict: bool = False) -> dict[str,
     evidence_items = list((pkg["evidence"] or {}).get("items") or [])
     evidence_by_case: dict[str, list[dict]] = {}
     evidence_by_id: dict[str, dict] = {}
+    stale_evidence = 0
+    unbound_evidence = 0
     for item in evidence_items:
         eid = str(item.get("id") or "")
         if eid:
@@ -494,6 +900,14 @@ def audit_run_package(run_dir: str | Path, *, strict: bool = False) -> dict[str,
             if actual.exists():
                 if _sha256(actual) != item.get("sha256"):
                     errors.append(f"证据哈希不匹配: {raw_path}")
+        validity = evidence_validity(item, contract, manifest)
+        if validity["status"] == "stale":
+            stale_evidence += 1
+            message = f"证据失效 {eid or raw_path}: {'; '.join(validity['reasons'])}"
+            (errors if strict else warnings).append(message)
+        elif validity["status"] == "unbound":
+            unbound_evidence += 1
+            warnings.append(f"证据未绑定版本 {eid or raw_path}: {'; '.join(validity['reasons'])}")
 
     for case in cov["cases"].values():
         cid = str(case.get("id") or "")
@@ -549,6 +963,8 @@ def audit_run_package(run_dir: str | Path, *, strict: bool = False) -> dict[str,
         "invariants": cov["summary"]["invariants"],
         "invariant_coverage": cov["summary"]["invariant_coverage"],
         "evidence_items": len(evidence_items),
+        "stale_evidence": stale_evidence,
+        "unbound_evidence": unbound_evidence,
         "defects": len(defects),
         "judgements": jg_total,
         "cleanup_status": (ledger.get("cleanup") or {}).get("status", ""),

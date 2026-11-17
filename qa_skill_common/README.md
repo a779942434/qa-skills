@@ -28,8 +28,9 @@
 | `output.py` | **输出限长契约**：`emit()` 截断观察字段并给 counts/full_path；判定字段（toast/内联错误/HTTP/data_diff）永不截断 |
 | `fingerprint.py` | 元素指纹：组件探针 / 结构快照对比 / 相似度自愈定位 |
 | `page_registry.py` | **站点/页面注册表**：跨会话复用直达 URL / 等待接口 / 选择器 / 坑；两级可信度 + 一致性校验 |
-| `case_cli.py` | **单用例/批次闭环 CLI**（`scripts/qa_case.py`）：`exec` / `run` / `status` / `report` / `pages` / `init` / `audit` / `metrics` / `replay`；是 phase_runner 的门面，**不碰状态文件**（由 `tests/test_case_cli_boundary.py` 静态断言） |
-| `run_package.py` | **标准运行包**：manifest / contract / coverage / evidence index / defects 的初始化、读取、证据索引与综合审计；兼容 legacy 目录 |
+| `case_cli.py` | **单用例/批次闭环 CLI**（`scripts/qa_case.py`）：`exec` / `run` / `status` / `report` / `pages` / `init` / `audit` / `gaps` / `oracle` / `decision` / `metrics` / `replay`；是 phase_runner 的门面，**不碰状态文件**（由 `tests/test_case_cli_boundary.py` 静态断言） |
+| `run_package.py` | **标准运行包**：manifest / contract / coverage / evidence index / defects 的初始化、读取、证据索引、需求版本绑定与综合审计；兼容 legacy 目录 |
+| `gaps.py` | **测试就绪度缺口**：区分未执行、未覆盖、环境/数据阻塞、待确认、失败、缺证据、证据过期/未绑定和明确豁免；输出 `ready` 与可执行下一步 |
 | `oracle.py` | **结论判定树**：区分 implementation_defect / requirement_risk / environment_blocked / test_artifact / pass，并校验缺陷准入门槛 |
 | `coverage.py` | 需求条款→风险→用例→不变量覆盖审计：检查孤儿用例、空决策、P0/P1 未执行和缺失映射 |
 | `invariants.py` | 可执行业务不变量：数量守恒、状态转移、身份唯一、时间顺序、数据血缘等 |

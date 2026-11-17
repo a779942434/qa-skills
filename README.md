@@ -77,21 +77,26 @@ python3 tools/check_skill_docs.py            # 断言红线条数 + 每条动作
 `sync-skills.sh` 前置会跑上下文预算与文档闸门；`vendor-common.sh --check` 会追加
 `qa_skill_common` 离线单测。基线数据与验收目标见 `tools/baseline.md`。
 
-## 标准运行包与判定闭环（2026-11-02）
+## 标准运行包与判定闭环（2026-11-17：P0 判定合同 + 就绪缺口）
 
 新标准功能测/深度专项测使用一个需求一个运行包：
 
 ```bash
 python3 web-blackbox-testing/scripts/qa_case.py init --run-dir runs/<run> --feature <功能> --mode standard --requirement <需求号> --with-runner
 python3 web-blackbox-testing/scripts/qa_case.py init --run-dir runs/<run> --feature <功能> --mode standard --from-cases cases.json
+python3 web-blackbox-testing/scripts/qa_case.py oracle --run-dir runs/<run> --requirement R-01 --mode ui --expected "<可判定预期>"
+python3 web-blackbox-testing/scripts/qa_case.py decision --run-dir runs/<run> --requirement R-01 --status confirmed --resolution "<产品口径>"
 python3 web-blackbox-testing/scripts/qa_case.py run --spec runs/<run>/run_all.py
 python3 web-blackbox-testing/scripts/qa_case.py audit --run-dir runs/<run> --strict
+python3 web-blackbox-testing/scripts/qa_case.py gaps --run-dir runs/<run> --strict
 python3 web-blackbox-testing/scripts/qa_case.py report --run-dir runs/<run>
 ```
 
 运行包包含 `manifest.json`、`contract.json`、`coverage.json`、`evidence/index.json`、
 `defects.json`，并继续使用 `run_state.json`、`data_ledger.json`、`judgements.jsonl`、
 `conclusions.json`。`audit` 检查需求覆盖、P0/P1 证据、缺陷门槛、qa_action 采纳和数据清理；
+`gaps` 另行回答“还有什么没测/没通过”，区分待确认、环境/数据阻塞、失败、缺证据和过期证据；
+`oracle` / `decision` 把判定依据与产品口径写进 `contract.json`，避免后续靠对话回忆；
 `metrics` 聚合运行包指标：
 
 ```bash

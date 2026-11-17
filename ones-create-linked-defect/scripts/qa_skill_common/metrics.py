@@ -115,6 +115,14 @@ def collect_metrics(root: str | Path = "runs", *, since: str | None = None) -> d
         statuses = [str(c.get("status") or "") for c in cases.values()]
         defects = list((pkg["defects"] or {}).get("defects") or [])
         evidence_items = list((pkg["evidence"] or {}).get("items") or [])
+        stale_evidence = 0
+        unbound_evidence = 0
+        for item in evidence_items:
+            validity = run_package.evidence_validity(item, contract, manifest)
+            if validity["status"] == "stale":
+                stale_evidence += 1
+            elif validity["status"] == "unbound":
+                unbound_evidence += 1
         judgement_count = _judgement_count(run_dir)
         ui_cases = [c for c in cases.values()
                     if str(c.get("oracle_mode") or "ui").lower() == "ui"
@@ -157,6 +165,8 @@ def collect_metrics(root: str | Path = "runs", *, since: str | None = None) -> d
             "ui_cases": len(ui_cases),
             "judgements": judgement_count,
             "evidence_items": len(evidence_items),
+            "stale_evidence": stale_evidence,
+            "unbound_evidence": unbound_evidence,
             "evidence_case_coverage": round(len(evidence_cases) / len(cases), 4) if cases else 0.0,
             "defects": len(defects),
             "eligible_defects": eligible_defects,
@@ -170,6 +180,9 @@ def collect_metrics(root: str | Path = "runs", *, since: str | None = None) -> d
     total_invalid = sum(r["invalid_defects"] for r in runs)
     total_eligible = sum(r["eligible_defects"] for r in runs)
     total_repro = sum(r["reproducible_defects"] for r in runs)
+    total_evidence = sum(r["evidence_items"] for r in runs)
+    total_stale_evidence = sum(r["stale_evidence"] for r in runs)
+    total_unbound_evidence = sum(r["unbound_evidence"] for r in runs)
     new_runs = [r for r in runs if not r["legacy"]]
     summary = {
         "runs": len(runs),
@@ -184,6 +197,9 @@ def collect_metrics(root: str | Path = "runs", *, since: str | None = None) -> d
         "invalid_defect_rate": round(total_invalid / total_defects, 4) if total_defects else 0.0,
         "defect_gate_pass_rate": round(total_eligible / total_defects, 4) if total_defects else 0.0,
         "defect_reproducibility_rate": round(total_repro / total_defects, 4) if total_defects else 0.0,
+        "stale_evidence": total_stale_evidence,
+        "unbound_evidence": total_unbound_evidence,
+        "stale_evidence_rate": round(total_stale_evidence / total_evidence, 4) if total_evidence else 0.0,
         "duration_ms": sum(r["duration_ms"] for r in runs),
         "total_wall_time_ms": sum(r["wall_time_ms"] for r in runs),
         "avg_wall_time_ms": round(sum(r["wall_time_ms"] for r in new_runs) / len(new_runs), 0) if new_runs else 0,
@@ -205,5 +221,6 @@ def render_text(result: dict[str, Any]) -> str:
         f"- 无效缺陷率：{s.get('invalid_defect_rate', 0):.1%}",
         f"- 缺陷门槛通过率：{s.get('defect_gate_pass_rate', 0):.1%}",
         f"- 缺陷可复现率：{s.get('defect_reproducibility_rate', 0):.1%}",
+        f"- 过期证据：{s.get('stale_evidence', 0)}（{s.get('stale_evidence_rate', 0):.1%}）",
     ]
     return "\n".join(lines)

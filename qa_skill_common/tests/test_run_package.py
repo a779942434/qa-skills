@@ -76,6 +76,62 @@ class InitAndEvidenceTest(unittest.TestCase):
         self.assertEqual(data["decisions"][0]["id"], rec["id"])
         self.assertEqual(data["decisions"][0]["resolution"], "按产品口径 A")
 
+    def test_environment_snapshot_id_is_stable(self):
+        first = RP.environment_snapshot("http://example.test", tenant_alias="t1", role="admin")
+        second = RP.environment_snapshot("http://example.test", tenant_alias="t1", role="admin")
+        self.assertEqual(first["snapshot_id"], second["snapshot_id"])
+        changed = RP.environment_snapshot("http://example.test", tenant_alias="t2", role="admin")
+        self.assertNotEqual(first["snapshot_id"], changed["snapshot_id"])
+
+    def test_decision_updates_requirement_status_and_links(self):
+        RP.init_run_package(self.run_dir, "示例功能", mode="standard", requirements=["R-01"])
+        decision = RP.append_decision(self.run_dir, {
+            "requirement_ids": ["R-01"], "status": "confirmed",
+            "resolution": "按产品口径 A", "owner": "product",
+        })
+        contract = json.loads((self.run_dir / "contract.json").read_text(encoding="utf-8"))
+        req = contract["requirements"][0]
+        self.assertEqual(req["status"], "defined")
+        self.assertIn(decision["id"], req["decision_ids"])
+
+    def test_evidence_binding_becomes_stale_when_oracle_changes(self):
+        RP.init_run_package(self.run_dir, "示例功能", mode="standard", requirements=["R-01"])
+        RP.set_requirement_oracle(self.run_dir, "R-01", mode="ui", expected="预期 A")
+        RP.upsert_case(self.run_dir, {
+            "id": "TC-01", "priority": "P0", "requirement_refs": ["R-01"],
+            "oracle_mode": "ui", "status": "通过",
+        })
+        evidence_file = self.run_dir / "evidence" / "shot.png"
+        evidence_file.write_bytes(b"evidence")
+        evidence = RP.add_evidence(self.run_dir, evidence_file, case_id="TC-01", source="ui")
+        manifest = json.loads((self.run_dir / "manifest.json").read_text(encoding="utf-8"))
+        contract = json.loads((self.run_dir / "contract.json").read_text(encoding="utf-8"))
+        self.assertEqual(RP.evidence_validity(evidence, contract, manifest)["status"], "valid")
+        RP.set_requirement_oracle(self.run_dir, "R-01", mode="ui", expected="预期 B")
+        contract = json.loads((self.run_dir / "contract.json").read_text(encoding="utf-8"))
+        self.assertEqual(RP.evidence_validity(evidence, contract, manifest)["status"], "stale")
+        audit = RP.audit_run_package(self.run_dir, strict=True)
+        self.assertFalse(audit["ok"])
+        self.assertTrue(any("证据失效" in error for error in audit["errors"]))
+
+    def test_evidence_binding_becomes_stale_when_environment_changes(self):
+        RP.init_run_package(self.run_dir, "示例功能", mode="standard", requirements=["R-01"])
+        RP.set_requirement_oracle(self.run_dir, "R-01", mode="ui", expected="预期 A")
+        RP.upsert_case(self.run_dir, {
+            "id": "TC-01", "priority": "P0", "requirement_refs": ["R-01"],
+            "oracle_mode": "ui", "status": "通过",
+        })
+        evidence_file = self.run_dir / "evidence" / "shot.png"
+        evidence_file.write_bytes(b"evidence")
+        evidence = RP.add_evidence(self.run_dir, evidence_file, case_id="TC-01", source="ui")
+        RP.update_manifest(self.run_dir, environment=RP.environment_snapshot(
+            "http://other.test", tenant_alias="t2", role="admin"))
+        manifest = json.loads((self.run_dir / "manifest.json").read_text(encoding="utf-8"))
+        contract = json.loads((self.run_dir / "contract.json").read_text(encoding="utf-8"))
+        validity = RP.evidence_validity(evidence, contract, manifest)
+        self.assertEqual(validity["status"], "stale")
+        self.assertTrue(any("环境快照" in reason for reason in validity["reasons"]))
+
     def test_legacy_package_is_warning_not_crash(self):
         (self.run_dir).mkdir(parents=True, exist_ok=True)
         (self.run_dir / "run_state.json").write_text("{}", encoding="utf-8")

@@ -348,6 +348,7 @@ def main():
         print(f"[run_all] 数据台账：{state.ledger_path}")
         print("[run_all] 收尾请执行：")
         print(f"  python scripts/qa_case.py audit --run-dir {package_dir} --strict")
+        print(f"  python scripts/qa_case.py gaps --run-dir {package_dir} --strict")
         print(f"  python scripts/qa_case.py report --run-dir {package_dir}")
     except KeyboardInterrupt:
         keep_session = True

@@ -23,6 +23,7 @@ description: >-
 ## 标准运行包（standard/deep）
 
 - 标准功能测和深度专项测先用 `qa_case.py init` 建立 `manifest.json/contract.json/coverage.json/evidence/index.json/defects.json`，结束时用 `qa_case.py audit --strict`。
+- 每条 `R-xx` 用 `qa_case.py oracle` 写判定依据，产品口径用 `qa_case.py decision` 留痕；收尾必须用 `qa_case.py gaps --strict` 检查未执行、阻塞、失败、待确认和过期证据。
 - 判定走 `qa_action`；API/SQL 专用判断在 coverage 中显式写 `oracle_mode=api/db`，不要伪造 UI 判定。
 - 最终报告只由 `qa_case.py report --run-dir <run-dir>` 生成；报告和缺陷统一读结构化运行包。
 - 详细文件职责和判定纪律见 [references/run-package.md](references/run-package.md)。

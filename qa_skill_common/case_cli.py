@@ -33,6 +33,7 @@ from pathlib import Path
 from . import output as O
 from . import page_registry as REG
 from . import coverage as coverage_mod
+from . import gaps as gaps_mod
 from . import metrics as metrics_mod
 from . import oracle
 from . import run_package
@@ -54,7 +55,7 @@ DEFAULT_API_TIMEOUT = 45.0
 # ---------------------------------------------------------------- 输出
 
 def _emit(payload, *, kind, run_dir=None, label=None, max_chars=MAX_STDOUT_CHARS,
-          full_path_hint=None):
+          full_path_hint=None, trunable_keys=None):
     """输出到 stdout：单行 JSON、限长；完整版落盘 <run_dir>/cases/。
 
     ``full_path_hint``：调用方已自落全量现场时传入，交给 ``O.emit`` 复用，
@@ -62,12 +63,13 @@ def _emit(payload, *, kind, run_dir=None, label=None, max_chars=MAX_STDOUT_CHARS
     """
     out_dir = (Path(run_dir) / "cases") if run_dir else None
     return O.emit(payload, kind=kind, max_chars=max_chars, out_dir=out_dir, name=label,
-                  reuse_full=full_path_hint)
+                  reuse_full=full_path_hint, trunable_keys=trunable_keys)
 
 
-def _finish(payload, *, kind, run_dir=None, label=None, code=0, full_path_hint=None):
+def _finish(payload, *, kind, run_dir=None, label=None, code=0, full_path_hint=None,
+            trunable_keys=None):
     print(_emit(payload, kind=kind, run_dir=run_dir, label=label,
-                full_path_hint=full_path_hint))
+                full_path_hint=full_path_hint, trunable_keys=trunable_keys))
     return code
 
 
@@ -345,20 +347,39 @@ def _run_step(page, watcher, step, i, out_dir, label, feature, state=None):
 
 # ---------------------------------------------------------------- 子命令
 
-def _load_cases_json(path_value: str | None) -> list[dict]:
-    """读取生成技能的结构化用例 sidecar；接受 list 或 {"cases": [...]}。"""
+def _load_cases_sidecar(path_value: str | None) -> dict:
+    """读取生成技能 sidecar；兼容纯 cases 数组和完整 coverage.json。"""
     if not path_value:
-        return []
+        return {"cases": [], "requirements": [], "invariants": [],
+                "exclusions": [], "decisions": []}
     path = Path(path_value).expanduser()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         raise ValueError("cases 文件不是合法 JSON: {}".format(exc)) from exc
     if isinstance(data, dict):
-        data = data.get("cases") or data.get("test_cases") or []
-    if not isinstance(data, list):
+        cases = data.get("cases") or data.get("test_cases") or []
+        requirements = data.get("requirements") or []
+        invariants = data.get("invariants") or []
+        exclusions = data.get("exclusions") or []
+        decisions = data.get("decisions") or []
+    elif isinstance(data, list):
+        cases, requirements, invariants, exclusions, decisions = data, [], [], [], []
+    else:
         raise ValueError("cases 文件应为数组，或含 cases/test_cases 数组")
-    return [run_package.normalize_case_record(item) for item in data if isinstance(item, dict)]
+    if not isinstance(cases, list):
+        raise ValueError("cases 必须是数组")
+    for key, value in (("requirements", requirements), ("invariants", invariants),
+                       ("exclusions", exclusions), ("decisions", decisions)):
+        if not isinstance(value, list):
+            raise ValueError("{} 必须是数组".format(key))
+    return {
+        "cases": [run_package.normalize_case_record(item) for item in cases if isinstance(item, dict)],
+        "requirements": [dict(item) for item in requirements if isinstance(item, dict)],
+        "invariants": [dict(item) for item in invariants if isinstance(item, dict)],
+        "exclusions": [dict(item) for item in exclusions if isinstance(item, dict)],
+        "decisions": [dict(item) for item in decisions if isinstance(item, dict)],
+    }
 
 
 def cmd_init(args):
@@ -366,10 +387,15 @@ def cmd_init(args):
     run_dir = Path(args.run_dir).expanduser()
     base_url = args.base_url or os.environ.get("MES_URL", "")
     try:
-        cases = _load_cases_json(args.from_cases)
+        sidecar = _load_cases_sidecar(args.from_cases)
+        cases = sidecar["cases"]
     except ValueError as exc:
         return _err(str(exc), next_hint="修正 cases JSON 后重试", code=2)
     requirements = list(args.requirement or [])
+    for req in sidecar["requirements"]:
+        ref = str(req.get("id") or req.get("requirement_ref") or "").strip()
+        if ref and ref not in requirements:
+            requirements.append(ref)
     for case in cases:
         for ref in case.get("requirement_refs") or []:
             if ref not in requirements:
@@ -388,18 +414,16 @@ def cmd_init(args):
             run_dir, args.feature, mode=args.mode,
             requirements=requirements, force=args.force,
             run_id=args.run_id or "", environment=environment,
+            data_batch_id=args.data_batch_id or "",
         )
+        for req in sidecar["requirements"]:
+            run_package.upsert_requirement(run_dir, req, force=True)
         for case in cases:
             run_package.upsert_case(run_dir, case, force=args.force)
-        case_refs = {ref for case in cases for ref in (case.get("requirement_refs") or [])}
-        if case_refs:
-            contract_path = run_dir / "contract.json"
-            contract_data = json.loads(contract_path.read_text(encoding="utf-8"))
-            for req in contract_data.get("requirements") or []:
-                if str(req.get("id") or "") in case_refs:
-                    req["status"] = "defined"
-            contract_path.write_text(json.dumps(contract_data, ensure_ascii=False, indent=2),
-                                     encoding="utf-8")
+        run_package.merge_coverage_metadata(
+            run_dir, invariants=sidecar["invariants"], exclusions=sidecar["exclusions"])
+        for decision in sidecar["decisions"]:
+            run_package.append_decision(run_dir, decision)
         state = RunState.load_or_create(run_dir, run_id=args.run_id or "", feature=args.feature)
         state.save()
     except Exception as exc:
@@ -439,6 +463,9 @@ def cmd_init(args):
         "mode": args.mode,
         "requirements": requirements,
         "cases": len(cases),
+        "invariants": len(sidecar["invariants"]),
+        "exclusions": len(sidecar["exclusions"]),
+        "decisions": len(sidecar["decisions"]),
         "case_file": str(Path(args.from_cases).expanduser()) if args.from_cases else "",
         "runner": runner_path,
         "files": paths,
@@ -460,6 +487,68 @@ def cmd_audit(args):
     }
     code = 0 if audit["ok"] else (2 if not audit.get("structure_ok", True) else 1)
     return _finish(payload, kind="audit", run_dir=run_dir, label="audit", code=code)
+
+
+def cmd_gaps(args):
+    """输出剩余风险：未执行、阻塞、待确认、失败、缺证据、证据过期。"""
+    run_dir = Path(args.run_dir).expanduser()
+    if not (run_dir / "manifest.json").exists():
+        return _err("运行包不存在或缺少 manifest.json", code=2, run_dir=run_dir)
+    pkg, result = gaps_mod.analyze_run_package(str(run_dir))
+    if pkg.get("parse_errors"):
+        return _err("运行包 JSON 解析失败: {}".format("; ".join(pkg["parse_errors"])), code=2,
+                    run_dir=run_dir)
+    payload = {
+        "ok": True,
+        "ready": result["ready"],
+        "mode": result["mode"],
+        "legacy": bool(pkg.get("legacy")),
+        "summary": result["summary"],
+        "blocking_categories": result["blocking_categories"],
+        "next_actions": result["next_actions"],
+    }
+    for key in gaps_mod.CATEGORY_KEYS:
+        payload[key] = result["categories"].get(key, [])
+    if not result["ready"]:
+        payload["next_hint"] = "先处理 blocking_categories；完整缺口见 full_path（如输出被截断）"
+    code = 1 if args.strict and not result["ready"] else 0
+    return _finish(payload, kind="gaps", run_dir=run_dir, label="gaps", code=code,
+                   trunable_keys=gaps_mod.CATEGORY_KEYS)
+
+
+def cmd_oracle(args):
+    """写入一条需求的判定依据。"""
+    run_dir = Path(args.run_dir).expanduser()
+    try:
+        req = run_package.set_requirement_oracle(
+            run_dir, args.requirement, mode=args.mode, expected=args.expected,
+            precision=args.precision or "", evidence=args.evidence or [],
+            source=args.source or "", quote=args.quote or "",
+            data_dependencies=args.data_dependency or [],
+        )
+    except Exception as exc:
+        return _err("写入判定依据失败: {}".format(exc), code=1, run_dir=run_dir)
+    return _finish({"status": "updated", "requirement": req}, kind="oracle",
+                   run_dir=run_dir, label="oracle", code=0)
+
+
+def cmd_decision(args):
+    """追加产品/业务决策，关闭或挂起一个需求口径。"""
+    run_dir = Path(args.run_dir).expanduser()
+    try:
+        rec = run_package.append_decision(run_dir, {
+            "requirement_ids": args.requirement,
+            "status": args.status,
+            "resolution": args.resolution or "",
+            "owner": args.owner or "",
+            "source": args.source or "",
+            "applies_to": args.applies_to or "",
+            "valid_until": args.valid_until or "",
+        })
+    except Exception as exc:
+        return _err("写入决策失败: {}".format(exc), code=1, run_dir=run_dir)
+    return _finish({"status": "updated", "decision": rec}, kind="decision",
+                   run_dir=run_dir, label="decision", code=0)
 
 
 def cmd_metrics(args):
@@ -1037,6 +1126,8 @@ def build_parser():
     p.add_argument("--config-fingerprint", default=None)
     p.add_argument("--browser-profile", default=None)
     p.add_argument("--app-version", default=None)
+    p.add_argument("--data-batch-id", default=None,
+                   help="本运行的数据批次标识；默认使用 run_id")
     p.add_argument("--with-runner", action="store_true",
                    help="复制可执行的 run_all.py 模板并预填 CONFIG")
     p.add_argument("--from-cases", default=None,
@@ -1049,6 +1140,38 @@ def build_parser():
     p.add_argument("--strict", action="store_true")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_audit)
+
+    p = sub.add_parser("gaps", help="列出剩余测试风险与就绪度缺口")
+    p.add_argument("--run-dir", required=True)
+    p.add_argument("--strict", action="store_true", help="未 ready 时返回非零退出码")
+    p.set_defaults(func=cmd_gaps)
+
+    p = sub.add_parser("oracle", help="写入需求判定依据（UI/API/DB/下游）")
+    p.add_argument("--run-dir", required=True)
+    p.add_argument("--requirement", required=True)
+    p.add_argument("--mode", required=True, choices=("ui", "api", "db", "mixed", "downstream"))
+    p.add_argument("--expected", required=True, help="可判定的预期结果")
+    p.add_argument("--precision", default="", help="数值/时间/文案精度口径")
+    p.add_argument("--evidence", action="append", default=[],
+                   help="要求的证据通道，可重复")
+    p.add_argument("--source", default="", help="需求原文来源/链接")
+    p.add_argument("--quote", default="", help="可独立验收的需求原文")
+    p.add_argument("--data-dependency", action="append", default=[],
+                   help="依赖的配置/主数据，可重复")
+    p.set_defaults(func=cmd_oracle)
+
+    p = sub.add_parser("decision", help="记录产品/业务口径决策")
+    p.add_argument("--run-dir", required=True)
+    p.add_argument("--requirement", action="append", required=True,
+                   help="关联需求点，可重复")
+    p.add_argument("--status", required=True,
+                   choices=("open", "pending", "resolved", "approved", "confirmed", "waived", "rejected"))
+    p.add_argument("--resolution", default="", help="结论或待确认问题")
+    p.add_argument("--owner", default="")
+    p.add_argument("--source", default="", help="需求/评论/会议/ONES 链接")
+    p.add_argument("--applies-to", default="", help="适用环境/租户/版本")
+    p.add_argument("--valid-until", default="", help="决策有效期（日期或 ISO 时间）")
+    p.set_defaults(func=cmd_decision)
 
     p = sub.add_parser("metrics", help="聚合运行包质量与效率指标")
     p.add_argument("--root", default="runs")

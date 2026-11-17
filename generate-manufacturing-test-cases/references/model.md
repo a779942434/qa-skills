@@ -38,8 +38,16 @@
 
 ```json
 {
+  "requirements": [{
+    "id": "R-01", "quote": "保存成功且列表新增 1 条", "source": "PRD 3.1",
+    "status": "defined", "case_ids": ["TC-01"],
+    "oracle": {"mode": "ui", "expected": "提示保存成功；列表新增 1 条，数量=100", "precision": "数量整数"}
+  }],
   "cases": [{"id": "TC-01", "priority": "P0", "requirement_refs": ["R-01"], "invariant_ids": ["INV-01"]}],
   "invariants": [{"id": "INV-01", "name": "数量守恒", "case_ids": ["TC-01"]}],
-  "exclusions": [{"requirement_ref": "R-02", "reason": "需求未定义"}]
+  "exclusions": [{"requirement_ref": "R-02", "reason": "需求未定义"}],
+  "decisions": []
 }
 ```
+
+`oracle` 必须写可执行判定：模式（ui/api/db/mixed/downstream）+ 预期结果 + 精度/口径；产品尚未确认的需求在 `decisions` 中记 `open/pending`，确认后再更新状态与来源。

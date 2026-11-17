@@ -416,11 +416,93 @@ class TestRunPackageCommands(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertTrue((self.run_dir / "run_all.py").exists())
 
+    def test_oracle_decision_and_gaps_flow(self):
+        self.assertEqual(_call([
+            "init", "--run-dir", str(self.run_dir), "--feature", "P0 示例",
+            "--mode", "standard", "--requirement", "R-01",
+        ])[0], 0)
+        rc, out = _call([
+            "oracle", "--run-dir", str(self.run_dir), "--requirement", "R-01",
+            "--mode", "ui", "--expected", "保存成功", "--evidence", "ui",
+            "--source", "PRD 3.1", "--quote", "点击保存后列表新增 1 条",
+        ])
+        self.assertEqual(rc, 0, out)
+        contract = json.loads((self.run_dir / "contract.json").read_text(encoding="utf-8"))
+        self.assertEqual(contract["requirements"][0]["quote"], "点击保存后列表新增 1 条")
+        self.assertEqual(contract["requirements"][0]["source"], "PRD 3.1")
+        rc, out = _call([
+            "decision", "--run-dir", str(self.run_dir), "--requirement", "R-01",
+            "--status", "confirmed", "--resolution", "按产品口径 A", "--owner", "product",
+        ])
+        self.assertEqual(rc, 0, out)
+        RP.upsert_case(self.run_dir, {
+            "id": "TC-01", "priority": "P0", "requirement_refs": ["R-01"],
+            "oracle_mode": "ui", "status": "通过",
+        })
+        evidence = self.run_dir / "evidence" / "shot.txt"
+        evidence.write_text("x", encoding="utf-8")
+        RP.add_evidence(self.run_dir, evidence, case_id="TC-01", source="ui")
+        rc, out = _call(["gaps", "--run-dir", str(self.run_dir), "--strict"])
+        self.assertEqual(rc, 0, out)
+        payload = json.loads(out)
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["summary"]["by_category"]["stale_evidence"], 0)
+
+    def test_init_imports_full_coverage_sidecar(self):
+        sidecar = self.run_dir.parent / "coverage.json"
+        sidecar.write_text(json.dumps({
+            "requirements": [{
+                "id": "R-01", "quote": "保存成功", "status": "defined",
+                "oracle": {"mode": "ui", "expected": "列表新增 1 条"},
+            }],
+            "cases": [{
+                "id": "TC-01", "priority": "P0", "requirement_refs": ["R-01"],
+                "oracle_mode": "ui", "status": "未执行",
+            }],
+            "invariants": [{"id": "INV-01", "name": "数量守恒", "case_ids": ["TC-01"]}],
+            "exclusions": [{"requirement_ref": "R-09", "reason": "用户明确忽略"}],
+            "decisions": [{
+                "requirement_ids": ["R-01"], "status": "confirmed",
+                "resolution": "按产品口径 A", "owner": "product",
+            }],
+        }, ensure_ascii=False), encoding="utf-8")
+        rc, out = _call([
+            "init", "--run-dir", str(self.run_dir), "--feature", "P0 导入",
+            "--mode", "standard", "--from-cases", str(sidecar),
+        ])
+        self.assertEqual(rc, 0, out)
+        contract = json.loads((self.run_dir / "contract.json").read_text(encoding="utf-8"))
+        coverage = json.loads((self.run_dir / "coverage.json").read_text(encoding="utf-8"))
+        self.assertEqual(contract["requirements"][0]["oracle"]["expected"], "列表新增 1 条")
+        self.assertEqual(contract["decisions"][0]["status"], "confirmed")
+        self.assertEqual(coverage["invariants"][0]["id"], "INV-01")
+        self.assertEqual(coverage["exclusions"][0]["requirement_ref"], "R-09")
+
+    def test_gaps_output_stays_within_budget(self):
+        self.assertEqual(_call([
+            "init", "--run-dir", str(self.run_dir), "--feature", "大缺口",
+            "--mode", "standard", "--requirement", "R-01",
+        ])[0], 0)
+        for idx in range(80):
+            RP.upsert_case(self.run_dir, {
+                "id": "TC-{:03d}".format(idx), "priority": "P2",
+                "requirement_refs": ["R-01"], "status": "未执行",
+            })
+        rc, out = _call(["gaps", "--run-dir", str(self.run_dir)])
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(out.strip().splitlines()), 1)
+        self.assertLessEqual(len(out), C.MAX_STDOUT_CHARS)
+        payload = json.loads(out)
+        self.assertEqual(payload["summary"]["by_category"]["not_run"], 80)
+        self.assertTrue(payload.get("truncated"))
+        self.assertTrue(Path(payload["full_path"]).exists())
+
 
 class TestParserWiring(unittest.TestCase):
     def test_subcommands_present(self):
         ap = C.build_parser()
-        for cmd in ("exec", "run", "status", "report", "pages", "init", "audit", "metrics", "replay"):
+        for cmd in ("exec", "run", "status", "report", "pages", "init", "audit", "gaps",
+                    "oracle", "decision", "metrics", "replay"):
             self.assertEqual(ap.parse_args([cmd] + _required(cmd)).command, cmd)
 
 
@@ -430,6 +512,9 @@ def _required(cmd):
             "pages": ["--url", "http://x"],
             "init": ["--run-dir", ".", "--feature", "f"],
             "audit": ["--run-dir", "."],
+            "gaps": ["--run-dir", "."],
+            "oracle": ["--run-dir", ".", "--requirement", "R-01", "--mode", "ui", "--expected", "x"],
+            "decision": ["--run-dir", ".", "--requirement", "R-01", "--status", "pending"],
             "metrics": ["--root", "."],
             "replay": ["--run-dir", ".", "--defect", "BUG-01"]}[cmd]
 
