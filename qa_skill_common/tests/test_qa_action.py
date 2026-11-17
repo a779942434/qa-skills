@@ -102,7 +102,8 @@ class JudgementLogTest(unittest.TestCase):
             self.assertEqual(jg["verdict"], 1)
             self.assertEqual(jg["control"], 1)
             self.assertEqual(jg["failed"], 1, "control 判失败也要计数")
-            self.assertEqual(json.loads(open(log, encoding="utf-8").readline())["kind"], "verdict")
+            first_line = Path(log).read_text(encoding="utf-8").splitlines()[0]
+            self.assertEqual(json.loads(first_line)["kind"], "verdict")
 
     def test_no_env_is_silent(self):
         import os

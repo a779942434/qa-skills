@@ -100,6 +100,13 @@ python3 web-blackbox-testing/scripts/qa_case.py metrics --root runs --since 2026
 
 只有 `implementation_defect` 且通过证据/复现/需求引用门槛的缺陷才进入 ONES；需求风险、环境阻塞和测试伪影分别留档。
 
+### 测试文件与运行包整理约定
+
+- 正式单测按归属放置：`qa_skill_common/tests/`、各技能 `scripts/tests/`、`tools/tests/`；统一门禁为 `./tools/ci.sh`，不把所有测试硬搬到顶层，避免破坏模块导入路径。
+- 每个运行包的 `run_all.py` 固定在运行包根目录，其余执行脚本放 `<run-dir>/scripts/`；用例、证据、报告和结构化运行包文件保持原位。
+- 任务结论落档后，删除 `probe*`、`debug*`、`inspect*`、`diag*` 等一次性脚本及其 `*.log` / `*.out` 中间日志；不得为此删除证据截图、报告、缺陷清单或可复现的总入口。
+- `tmp/` 是可丢弃目录，任务结束应清空；历史运行包如果仍依赖根目录平铺脚本，不重排其路径，避免破坏旧入口。
+
 ## 公共实现包（qa_skill_common）
 
 `web-blackbox-testing` 与 `ones-create-linked-defect` 共用同一套浏览器/登录/侦察实现。为避免两份代码漂移，仓库只在根目录 `qa_skill_common/` 维护**唯一来源**，再由脚本内置到各技能：
